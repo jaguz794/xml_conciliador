@@ -1,0 +1,23 @@
+name: Deploy To Debian
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on:
+      - self-hosted
+      - linux
+      - debian
+      - xml-conciliador
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy application on server
+        shell: bash
+        run: bash scripts/deploy_server.sh
