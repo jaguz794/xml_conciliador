@@ -156,6 +156,15 @@ python -m backend.app.watch_folder
 
 Con eso, cada `XML` o `ZIP` que llegue a `facturas_entrada` se procesa y, si todo sale bien, se mueve a `facturas_procesadas`.
 
+Si vas a manejar cargas grandes por red o por una carpeta compartida, usa mejor el consumidor por sondeo:
+
+```powershell
+.venv\Scripts\Activate.ps1
+python -m backend.app.consume_folder
+```
+
+Ese proceso vuelve a escanear la carpeta, espera a que el archivo termine de copiarse y luego lo procesa.
+
 ## Endpoints principales
 
 - `GET /api/salud`
@@ -379,3 +388,52 @@ En Debian, lo recomendado es correrlo una vez al dia con `cron` o `systemd timer
 ```cron
 0 2 * * * cd /opt/xml_conciliador && /opt/xml_conciliador/.venv/bin/python -m backend.app.cleanup_processed_archives >> /var/log/xml_conciliador_zip_cleanup.log 2>&1
 ```
+
+## Cargue masivo por Samba
+
+Si quieres que otros equipos copien `ZIP` por red y que el servidor los procese sin pasar por la pagina, este es el flujo recomendado:
+
+1. Comparte por `Samba` la carpeta `facturas_entrada` del servidor.
+2. Haz que los equipos copien ahi los `ZIP`.
+3. En el backend deja corriendo `python -m backend.app.consume_folder`.
+4. El consumidor espera a que el archivo quede estable, lo carga a PostgreSQL y dispara el snapshot de conciliacion.
+5. Si activas `DELETE_PROCESSED_ZIP_IMMEDIATELY=true`, el `ZIP` fuente se borra apenas quede procesado correctamente.
+
+Variables utiles en `.env` para este escenario:
+
+```env
+WATCHER_COPY_WAIT_SECONDS=2.0
+WATCHER_POLL_INTERVAL_SECONDS=2.0
+WATCHER_STABLE_CHECKS=3
+WATCHER_READY_TIMEOUT_SECONDS=300.0
+FOLDER_CONSUMER_POLL_SECONDS=15.0
+DELETE_PROCESSED_ZIP_IMMEDIATELY=true
+```
+
+Notas practicas:
+
+- `DELETE_PROCESSED_ZIP_IMMEDIATELY=true` solo borra `ZIP`, no `XML`.
+- Si esa variable esta en `false`, el archivo se mueve a `facturas_procesadas`.
+- Para `Samba` con mucho volumen, es mas estable el consumidor por sondeo que el watcher basado solo en eventos.
+- El watcher tambien mejoro: ahora espera a que el archivo se estabilice y tambien atiende archivos que entran por renombre o movimiento.
+
+Ejemplo de servicio `systemd` para Debian:
+
+```ini
+[Unit]
+Description=Conciliador XML Samba Consumer
+After=network.target
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=/opt/xml_conciliador
+ExecStart=/opt/xml_conciliador/.venv/bin/python -m backend.app.consume_folder
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Con eso puedes dejar el cargue por web para casos puntuales y usar la carpeta Samba como canal principal de carga masiva.

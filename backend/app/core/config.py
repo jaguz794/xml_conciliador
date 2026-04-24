@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     reconciliation_cache_dir: Path = ROOT_DIR / "cache" / "conciliaciones"
     watcher_scan_existing_on_startup: bool = False
     watcher_copy_wait_seconds: float = 2.0
+    watcher_poll_interval_seconds: float = 2.0
+    watcher_stable_checks: int = 3
+    watcher_ready_timeout_seconds: float = 300.0
+    folder_consumer_poll_seconds: float = 15.0
+    delete_processed_zip_immediately: bool = False
     processed_zip_retention_days: int = 10
 
     @property

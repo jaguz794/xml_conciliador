@@ -1,5 +1,6 @@
 import io
 import shutil
+import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -12,6 +13,49 @@ from backend.app.services.reconciliation_service import build_and_cache_reconcil
 from backend.app.services.xml_service import parse_invoice_xml
 
 SUPPORTED_SUFFIXES = {".xml", ".zip"}
+
+
+def is_supported_source_file(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
+
+
+def wait_for_file_ready(path: Path) -> bool:
+    if not path.exists():
+        return False
+
+    initial_wait = max(settings.watcher_copy_wait_seconds, 0)
+    if initial_wait:
+        time.sleep(initial_wait)
+
+    deadline = time.monotonic() + max(settings.watcher_ready_timeout_seconds, 1.0)
+    stable_checks_required = max(settings.watcher_stable_checks, 1)
+    poll_interval = max(settings.watcher_poll_interval_seconds, 0.5)
+    last_signature: tuple[int, int] | None = None
+    stable_checks = 0
+
+    while time.monotonic() <= deadline:
+        if not path.exists() or not path.is_file():
+            return False
+
+        try:
+            stat = path.stat()
+        except OSError:
+            time.sleep(poll_interval)
+            continue
+
+        signature = (stat.st_size, stat.st_mtime_ns)
+        if stat.st_size > 0 and signature == last_signature:
+            stable_checks += 1
+        else:
+            last_signature = signature
+            stable_checks = 1 if stat.st_size > 0 else 0
+
+        if stable_checks >= stable_checks_required:
+            return True
+
+        time.sleep(poll_interval)
+
+    return False
 
 
 def _clear_invoice(factura: str, nit: str) -> None:
@@ -147,12 +191,20 @@ def _move_to_processed(path: Path, processed: list[ProcessedInvoice]) -> None:
     shutil.move(str(path), str(destination))
 
 
+def _finalize_processed_source(path: Path, processed: list[ProcessedInvoice]) -> None:
+    if path.suffix.lower() == ".zip" and settings.delete_processed_zip_immediately:
+        path.unlink(missing_ok=True)
+        return
+
+    _move_to_processed(path, processed)
+
+
 def process_file_path(path: Path, move_processed: bool = False) -> ProcessedBatchResponse:
     content = path.read_bytes()
     result = process_uploaded_file(path.name, content)
 
     if move_processed:
-        _move_to_processed(path, result.procesadas)
+        _finalize_processed_source(path, result.procesadas)
         cleanup_expired_processed_zips()
 
     return result
@@ -162,7 +214,7 @@ def scan_input_directory(move_processed: bool = False) -> ProcessedBatchResponse
     processed: list[ProcessedInvoice] = []
 
     for path in sorted(settings.input_dir.iterdir()):
-        if not path.is_file() or path.suffix.lower() not in SUPPORTED_SUFFIXES:
+        if not is_supported_source_file(path):
             continue
 
         batch = process_file_path(path, move_processed=move_processed)
