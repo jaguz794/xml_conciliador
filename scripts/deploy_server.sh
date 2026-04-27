@@ -34,6 +34,9 @@ rsync -av --delete \
   --exclude '.git/' \
   --exclude '.github/' \
   --exclude '.venv/' \
+  --exclude '__pycache__/' \
+  --exclude '*.pyc' \
+  --exclude '*.pyo' \
   --exclude '.env' \
   --exclude 'frontend/.env' \
   --exclude 'frontend/.env.production' \
