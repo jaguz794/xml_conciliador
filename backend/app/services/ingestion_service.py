@@ -1,4 +1,5 @@
 import io
+import logging
 import shutil
 import time
 import uuid
@@ -13,6 +14,7 @@ from backend.app.services.reconciliation_service import build_and_cache_reconcil
 from backend.app.services.xml_service import parse_invoice_xml
 
 SUPPORTED_SUFFIXES = {".xml", ".zip"}
+logger = logging.getLogger(__name__)
 
 
 def is_supported_source_file(path: Path) -> bool:
@@ -189,11 +191,13 @@ def _move_to_processed(path: Path, processed: list[ProcessedInvoice]) -> None:
     if destination.exists():
         destination = settings.processed_dir / f"{destination.stem}_{uuid.uuid4().hex[:6]}{destination.suffix}"
     shutil.move(str(path), str(destination))
+    logger.info("Archivo movido a procesados: %s -> %s", path.name, destination.name)
 
 
 def _finalize_processed_source(path: Path, processed: list[ProcessedInvoice]) -> None:
     if path.suffix.lower() == ".zip" and settings.delete_processed_zip_immediately:
         path.unlink(missing_ok=True)
+        logger.info("ZIP eliminado despues de procesar correctamente: %s", path.name)
         return
 
     _move_to_processed(path, processed)
@@ -202,6 +206,11 @@ def _finalize_processed_source(path: Path, processed: list[ProcessedInvoice]) ->
 def process_file_path(path: Path, move_processed: bool = False) -> ProcessedBatchResponse:
     content = path.read_bytes()
     result = process_uploaded_file(path.name, content)
+    logger.info(
+        "Archivo procesado correctamente: %s | facturas detectadas: %s",
+        path.name,
+        result.total_procesadas,
+    )
 
     if move_processed:
         _finalize_processed_source(path, result.procesadas)
