@@ -34,6 +34,13 @@ function formatBatchMessage(result: ProcessedBatchResponse): string {
   return `Se procesaron ${result.total_procesadas} factura(s) correctamente.`;
 }
 
+function formatDisplayNumber(value: number): string {
+  return new Intl.NumberFormat("es-CO", {
+    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
 function App() {
   const [nit, setNit] = useState("");
   const [factura, setFactura] = useState("");
@@ -169,6 +176,12 @@ function App() {
       setScanningFolder(false);
     }
   }
+
+  const acEmptyMessage = result
+    ? result.ac.rows.length === 0 && Math.abs(result.dashboard.costo.saldo) >= 1
+      ? `No hay ajustes AC clasificados para esta factura. La diferencia quedo en saldo por revisar (${formatDisplayNumber(result.dashboard.costo.saldo)}). Revisa el Cruce ERP/XML.`
+      : "No se encontraron ajustes de costo en esta factura."
+    : "No se encontraron ajustes de costo en esta factura.";
 
   return (
     <div className="app-shell">
@@ -348,7 +361,7 @@ function App() {
               <DataTable
                 title="AC - Ajuste costo"
                 table={result.ac}
-                emptyMessage="No se encontraron ajustes de costo en esta factura."
+                emptyMessage={acEmptyMessage}
               />
             ) : null}
             {activeTab === "np" ? (
