@@ -6,6 +6,8 @@ from db import get_connection
 # Ignorar advertencias de compatibilidad de Pandas
 warnings.filterwarnings('ignore', category=UserWarning, module='pandas')
 
+GLOBAL_TOTAL_TOLERANCE = 1
+
 def obtener_diferencias(factura, nit):
     logging.info(f"Generando cruce (Filtro EA + Multi-Barras + Rescate Ceros + Precio Real) para Factura: {factura} NIT: {nit}")
 
@@ -180,8 +182,8 @@ def obtener_diferencias(factura, nit):
             suma_erp = df['erp_total'].sum()
             diferencia_global = suma_xml - suma_erp
             
-            # Si el descuadre de toda la factura supera los 50 pesos, alertamos
-            estado_global = 'OK' if abs(diferencia_global) <= 50 else 'DIFERENCIA TOTAL'
+            # Mantenemos la misma tolerancia global que el dashboard web.
+            estado_global = 'OK' if abs(diferencia_global) <= GLOBAL_TOTAL_TOLERANCE else 'DIFERENCIA TOTAL'
 
             # Creamos un diccionario con celdas vacías para la nueva fila
             fila_totales = {col: '' for col in df.columns}

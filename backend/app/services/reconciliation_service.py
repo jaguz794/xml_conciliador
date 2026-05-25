@@ -174,7 +174,8 @@ FULL OUTER JOIN erp_data e
 ORDER BY estado DESC, codigo_barras ASC
 """
 
-CACHE_VERSION = "v6"
+CACHE_VERSION = "v7"
+GLOBAL_TOTAL_TOLERANCE = 1
 
 NUMERIC_COLUMNS = [
     "xml_cant",
@@ -368,35 +369,40 @@ def _get_comparison_dataframe(factura: str, nit: str) -> pd.DataFrame:
 
     frame = pd.DataFrame(rows, columns=columns)
 
-    if not frame.empty:
-        total_row = {column: "" for column in frame.columns}
-        total_row["codigo_barras"] = "TOTAL FACTURA"
-        total_row["descripcion_xml"] = ">>> SUMA GLOBAL DE LA FACTURA <<<"
+    return _append_total_row(frame)
 
-        for column in [
-            "xml_cant",
-            "erp_cant",
-            "dif_cant",
-            "xml_iva",
-            "erp_iva",
-            "dif_iva",
-            "xml_icui",
-            "erp_icui",
-            "dif_icui",
-            "xml_total",
-            "erp_total",
-            "dif_total",
-        ]:
-            total_row[column] = frame[column].sum()
 
-        total_difference = float(total_row["dif_total"])
-        total_row["estado"] = "OK" if abs(total_difference) <= 50 else "DIFERENCIA TOTAL"
-        total_row["xml_precio"] = 0
-        total_row["erp_precio"] = 0
-        total_row["dif_precio"] = 0
-        frame.loc[len(frame)] = total_row
+def _append_total_row(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
 
-    return frame
+    total_row = {column: "" for column in frame.columns}
+    total_row["codigo_barras"] = "TOTAL FACTURA"
+    total_row["descripcion_xml"] = ">>> SUMA GLOBAL DE LA FACTURA <<<"
+
+    for column in [
+        "xml_cant",
+        "erp_cant",
+        "dif_cant",
+        "xml_iva",
+        "erp_iva",
+        "dif_iva",
+        "xml_icui",
+        "erp_icui",
+        "dif_icui",
+        "xml_total",
+        "erp_total",
+        "dif_total",
+    ]:
+        total_row[column] = frame[column].sum()
+
+    total_difference = float(total_row["dif_total"])
+    total_row["estado"] = "OK" if abs(total_difference) <= GLOBAL_TOTAL_TOLERANCE else "DIFERENCIA TOTAL"
+    total_row["xml_precio"] = 0
+    total_row["erp_precio"] = 0
+    total_row["dif_precio"] = 0
+
+    return pd.concat([frame, pd.DataFrame([total_row])], ignore_index=True)
 
 
 def _coerce_numeric_columns(frame: pd.DataFrame) -> pd.DataFrame:
@@ -539,7 +545,7 @@ def _build_reconciliation_payload(factura: str, nit: str) -> ConciliacionRespons
 
     title = (
         "NECESARIO VALIDACION MANUAL"
-        if abs(dif_valor) > 1 or abs(dif_cant) > 0
+        if abs(dif_valor) > GLOBAL_TOTAL_TOLERANCE or abs(dif_cant) > 0
         else "CUADRE PERFECTO - SIN ACCION REQUERIDA"
     )
 
