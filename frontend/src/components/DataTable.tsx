@@ -42,8 +42,13 @@ function cellClass(column: string, value: unknown): string {
     return "cell-badge cell-badge-warn";
   }
 
-  if (normalizedColumn === "alerta_cruce" && normalizedValue === "RESCATE CEROS") {
-    return "cell-badge cell-badge-alert";
+  if (normalizedColumn === "alerta_cruce") {
+    if (normalizedValue.includes("RESCATE CEROS")) {
+      return "cell-badge cell-badge-alert";
+    }
+    if (normalizedValue.includes("CRUCE EMPAQUE")) {
+      return "cell-badge cell-badge-ok";
+    }
   }
 
   return "";

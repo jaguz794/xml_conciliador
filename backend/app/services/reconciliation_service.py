@@ -175,8 +175,13 @@ FULL OUTER JOIN erp_data e
 ORDER BY estado DESC, codigo_barras ASC
 """
 
-CACHE_VERSION = "v8"
+CACHE_VERSION = "v9"
 GLOBAL_TOTAL_TOLERANCE = 1
+
+PACKAGE_FACTOR_PATTERN = re.compile(
+    r"(?<!\d)(\d{1,3})(?:UND|UNID|UN|U)(?=X|\b)",
+    re.IGNORECASE,
+)
 
 SIZE_TOKEN_PATTERN = re.compile(
     r"(\d+(?:[.,]\d+)?)(?:G|GR|GRS|ML)",
@@ -219,6 +224,23 @@ PACKAGING_DESCRIPTION_TOKENS = {
     "UNX",
     "UX",
     "X",
+}
+
+PACKAGING_ALERT = "CRUCE EMPAQUE"
+
+ERP_SIDE_COLUMNS = [
+    "item_erp",
+    "descripcion_erp",
+    "erp_cant",
+    "erp_precio",
+    "erp_iva",
+    "erp_icui",
+    "erp_total",
+]
+
+DETAIL_INTERNAL_COLUMNS = {
+    "xml_cant_original",
+    "xml_factor_empaque",
 }
 
 AC_COLUMNS = [
@@ -441,9 +463,7 @@ def _get_comparison_dataframe(factura: str, nit: str) -> pd.DataFrame:
         rows = cursor.fetchall()
         columns = [description[0] for description in cursor.description]
 
-    frame = pd.DataFrame(rows, columns=columns)
-
-    return _append_total_row(frame)
+    return pd.DataFrame(rows, columns=columns)
 
 
 def _append_total_row(frame: pd.DataFrame) -> pd.DataFrame:
@@ -525,6 +545,222 @@ def _description_similarity(xml_description: Any, erp_description: Any) -> tuple
     erp_text = " ".join(sorted(erp_tokens))
     sequence_ratio = SequenceMatcher(None, xml_text, erp_text).ratio()
     return overlap, sequence_ratio
+
+
+def _extract_package_factor(description: Any) -> int:
+    normalized_description = re.sub(r"\s+", "", _text_value(description).upper())
+    if not normalized_description:
+        return 1
+
+    matches = [int(match.group(1)) for match in PACKAGE_FACTOR_PATTERN.finditer(normalized_description)]
+    valid_matches = [value for value in matches if value > 1]
+    return valid_matches[-1] if valid_matches else 1
+
+
+def _append_alert(existing_alert: Any, new_alert: str) -> str:
+    existing_parts = [part.strip() for part in _text_value(existing_alert).split("|") if part.strip()]
+    if new_alert not in existing_parts:
+        existing_parts.append(new_alert)
+    return " | ".join(existing_parts)
+
+
+def _totals_close(xml_total: Any, erp_total: Any) -> bool:
+    xml_total_value = abs(_float_value(xml_total))
+    erp_total_value = abs(_float_value(erp_total))
+    if xml_total_value <= 0 or erp_total_value <= 0:
+        return False
+
+    total_gap = abs(xml_total_value - erp_total_value)
+    tolerance = max(max(xml_total_value, erp_total_value) * 0.02, 50)
+    return total_gap <= tolerance
+
+
+def _apply_xml_package_adjustment(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+
+    adjusted = frame.copy()
+    adjusted["xml_cant_original"] = adjusted["xml_cant"]
+    adjusted["xml_factor_empaque"] = adjusted["descripcion_xml"].apply(_extract_package_factor).astype(int)
+    return adjusted
+
+
+def _infer_package_factor_from_matched_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+
+    adjusted = frame.copy()
+    for index, row in adjusted.iterrows():
+        if not _text_value(row.get("descripcion_xml")) or not _text_value(row.get("descripcion_erp")):
+            continue
+
+        xml_original_qty = _float_value(row.get("xml_cant_original") or row.get("xml_cant"))
+        erp_qty = _float_value(row.get("erp_cant"))
+        if xml_original_qty <= 0 or erp_qty <= 0:
+            continue
+
+        inferred_factor = erp_qty / xml_original_qty
+        rounded_factor = int(round(inferred_factor))
+        if rounded_factor <= 1 or abs(inferred_factor - rounded_factor) > 0.01:
+            continue
+        if not _totals_close(row.get("xml_total"), row.get("erp_total")):
+            continue
+
+        current_factor = int(_float_value(row.get("xml_factor_empaque")) or 1)
+        target_qty = xml_original_qty * rounded_factor
+        current_qty = _float_value(row.get("xml_cant"))
+        if rounded_factor <= current_factor and abs(current_qty - target_qty) <= 0.01:
+            continue
+
+        adjusted.at[index, "xml_factor_empaque"] = rounded_factor
+        adjusted.at[index, "xml_cant"] = target_qty
+        adjusted.at[index, "xml_precio"] = _float_value(row.get("xml_total")) / adjusted.at[index, "xml_cant"]
+        adjusted.at[index, "alerta_cruce"] = _append_alert(row.get("alerta_cruce"), PACKAGING_ALERT)
+
+    return adjusted
+
+
+def _merge_packaging_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+
+    adjusted = frame.copy().reset_index(drop=True)
+    xml_only_indexes = adjusted.index[
+        adjusted["descripcion_xml"].apply(_text_value).ne("")
+        & adjusted["descripcion_erp"].apply(_text_value).eq("")
+    ]
+    erp_only_indexes = adjusted.index[
+        adjusted["descripcion_xml"].apply(_text_value).eq("")
+        & adjusted["descripcion_erp"].apply(_text_value).ne("")
+    ]
+    if len(xml_only_indexes) == 0 or len(erp_only_indexes) == 0:
+        return adjusted
+
+    used_erp_indexes: set[int] = set()
+    rows_to_drop: list[int] = []
+
+    for xml_index in xml_only_indexes:
+        xml_row = adjusted.loc[xml_index]
+        xml_original_qty = _float_value(xml_row.get("xml_cant_original") or xml_row.get("xml_cant"))
+        if xml_original_qty <= 0:
+            continue
+
+        best_match_index: int | None = None
+        best_factor = 1
+        best_score: tuple[int, float, float] | None = None
+
+        for erp_index in erp_only_indexes:
+            if erp_index in used_erp_indexes:
+                continue
+
+            erp_row = adjusted.loc[erp_index]
+            erp_qty = _float_value(erp_row.get("erp_cant"))
+            if erp_qty <= 0:
+                continue
+
+            inferred_factor = erp_qty / xml_original_qty
+            rounded_factor = int(round(inferred_factor))
+            if rounded_factor <= 1 or abs(inferred_factor - rounded_factor) > 0.01:
+                continue
+            if not _totals_close(xml_row.get("xml_total"), erp_row.get("erp_total")):
+                continue
+
+            overlap, sequence_ratio = _description_similarity(
+                xml_row.get("descripcion_xml"),
+                erp_row.get("descripcion_erp"),
+            )
+            if overlap < 2 and sequence_ratio < 0.62:
+                continue
+
+            adjusted_xml_qty = xml_original_qty * rounded_factor
+            adjusted_xml_price = _float_value(xml_row.get("xml_total")) / adjusted_xml_qty
+            erp_price = _float_value(erp_row.get("erp_precio"))
+            if erp_price > 0:
+                price_tolerance = max(erp_price * 0.08, 5)
+                if abs(adjusted_xml_price - erp_price) > price_tolerance and overlap < 3 and sequence_ratio < 0.72:
+                    continue
+
+            total_gap = abs(_float_value(xml_row.get("xml_total")) - _float_value(erp_row.get("erp_total")))
+            score = (overlap, sequence_ratio, -total_gap)
+            if best_score is None or score > best_score:
+                best_match_index = erp_index
+                best_factor = rounded_factor
+                best_score = score
+
+        if best_match_index is None:
+            continue
+
+        adjusted.at[xml_index, "xml_factor_empaque"] = max(
+            int(_float_value(adjusted.at[xml_index, "xml_factor_empaque"]) or 1),
+            best_factor,
+        )
+        adjusted.at[xml_index, "xml_cant"] = xml_original_qty * best_factor
+        adjusted.at[xml_index, "xml_precio"] = (
+            _float_value(adjusted.at[xml_index, "xml_total"]) / adjusted.at[xml_index, "xml_cant"]
+        )
+
+        for column in ERP_SIDE_COLUMNS:
+            adjusted.at[xml_index, column] = adjusted.at[best_match_index, column]
+
+        adjusted.at[xml_index, "item_erp"] = _text_value(adjusted.at[best_match_index, "item_erp"]) or adjusted.at[
+            xml_index,
+            "item_erp",
+        ]
+        adjusted.at[xml_index, "alerta_cruce"] = _append_alert(
+            adjusted.at[xml_index, "alerta_cruce"],
+            PACKAGING_ALERT,
+        )
+
+        used_erp_indexes.add(best_match_index)
+        rows_to_drop.append(best_match_index)
+
+    if not rows_to_drop:
+        return adjusted
+
+    return adjusted.drop(index=rows_to_drop).reset_index(drop=True)
+
+
+def _compute_row_state(row: pd.Series) -> str:
+    if not _text_value(row.get("descripcion_xml")):
+        return "FALTA EN XML"
+    if not _text_value(row.get("descripcion_erp")):
+        return "FALTA EN ERP"
+    if abs(float(row.get("dif_cant", 0) or 0)) > 0.01:
+        return "DIFERENCIA CANTIDAD"
+    if abs(float(row.get("dif_precio", 0) or 0)) > 1:
+        return "DIFERENCIA PRECIO"
+    if abs(float(row.get("dif_iva", 0) or 0)) > 5:
+        return "DIFERENCIA IVA"
+    if abs(float(row.get("dif_icui", 0) or 0)) > 5:
+        return "DIFERENCIA ICUI"
+    if abs(float(row.get("dif_total", 0) or 0)) > 0.01:
+        return "DIFERENCIA TOTAL"
+    return "OK"
+
+
+def _recalculate_comparison_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+
+    adjusted = frame.copy()
+    adjusted["dif_cant"] = adjusted["xml_cant"] - adjusted["erp_cant"]
+    adjusted["dif_precio"] = adjusted["xml_precio"] - adjusted["erp_precio"]
+    adjusted["dif_iva"] = adjusted["xml_iva"] - adjusted["erp_iva"]
+    adjusted["dif_icui"] = adjusted["xml_icui"] - adjusted["erp_icui"]
+    adjusted["dif_total"] = adjusted["xml_total"] - adjusted["erp_total"]
+    adjusted["estado"] = adjusted.apply(_compute_row_state, axis=1)
+    return adjusted
+
+
+def _compose_adjustment_origin(base_origin: str, xml_row: pd.Series | None, erp_row: pd.Series | None) -> str:
+    alert_sources = []
+    if xml_row is not None:
+        alert_sources.append(_text_value(xml_row.get("alerta_cruce")))
+    if erp_row is not None and erp_row is not xml_row:
+        alert_sources.append(_text_value(erp_row.get("alerta_cruce")))
+    if any(PACKAGING_ALERT in alert for alert in alert_sources):
+        return f"{base_origin} | {PACKAGING_ALERT}"
+    return base_origin
 
 
 def _build_ac_explanation_row(
@@ -610,7 +846,11 @@ def _build_ac_explanation_frame(items_frame: pd.DataFrame) -> pd.DataFrame:
             _build_ac_explanation_row(
                 xml_row=working.loc[xml_index],
                 erp_row=working.loc[erp_index],
-                origin="CRUCE NETO ERP/XML",
+                origin=_compose_adjustment_origin(
+                    "CRUCE NETO ERP/XML",
+                    working.loc[xml_index],
+                    working.loc[erp_index],
+                ),
                 source_order=min(xml_index, erp_index),
             )
         )
@@ -640,7 +880,7 @@ def _build_ac_explanation_frame(items_frame: pd.DataFrame) -> pd.DataFrame:
             _build_ac_explanation_row(
                 xml_row=xml_row,
                 erp_row=erp_row,
-                origin=origin,
+                origin=_compose_adjustment_origin(origin, xml_row, erp_row),
                 source_order=index,
             )
         )
@@ -694,8 +934,15 @@ def _detect_packaging(frame: pd.DataFrame) -> pd.Series:
 
 
 def _build_reconciliation_payload(factura: str, nit: str) -> ConciliacionResponse:
-    frame = _get_comparison_dataframe(factura, nit)
-    items_frame = _coerce_numeric_columns(frame[frame["codigo_barras"] != "TOTAL FACTURA"].copy())
+    raw_frame = _get_comparison_dataframe(factura, nit)
+    items_frame = _coerce_numeric_columns(raw_frame.copy())
+    items_frame = _apply_xml_package_adjustment(items_frame)
+    items_frame = _infer_package_factor_from_matched_rows(items_frame)
+    items_frame = _merge_packaging_rows(items_frame)
+    items_frame = _recalculate_comparison_columns(items_frame)
+    detail_frame = _append_total_row(
+        items_frame.drop(columns=[column for column in DETAIL_INTERNAL_COLUMNS if column in items_frame.columns]).copy()
+    )
     packaging_mask = _detect_packaging(items_frame)
 
     np_frame = items_frame.copy()
@@ -765,7 +1012,7 @@ def _build_reconciliation_payload(factura: str, nit: str) -> ConciliacionRespons
         requiere_validacion=title != "CUADRE PERFECTO - SIN ACCION REQUERIDA",
         total_items=len(items_frame),
         items_con_diferencia=int((items_frame["estado"] != "OK").sum()),
-        alertas_rescate=int((items_frame["alerta_cruce"] == "RESCATE CEROS").sum()),
+        alertas_rescate=int(items_frame["alerta_cruce"].fillna("").astype(str).str.contains("RESCATE CEROS").sum()),
         conteos_estado=state_counts,
         costo=DashboardMetric(
             xml=_round_number(valor_xml),
@@ -809,7 +1056,7 @@ def _build_reconciliation_payload(factura: str, nit: str) -> ConciliacionRespons
         factura=factura,
         nit=nit,
         dashboard=dashboard,
-        detalle=_table_from_dataframe(frame),
+        detalle=_table_from_dataframe(detail_frame),
         ac=_table_from_dataframe(ac_frame, totals=ac_totals, summary=ac_summary),
         np=_table_from_dataframe(np_frame, totals=np_totals, summary=np_summary),
     )

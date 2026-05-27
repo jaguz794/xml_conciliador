@@ -101,6 +101,32 @@ class AcNetExplanationTests(unittest.TestCase):
         self.assertEqual(float(paired_row["CANTIDAD_ERP"]), 24.0)
         self.assertEqual(float(paired_row["DIF_COSTO_UND"]), -0.25)
 
+    def test_keeps_packaging_context_in_ac_origin(self) -> None:
+        frame = pd.DataFrame(
+            [
+                {
+                    "item_xml": "7702007082036",
+                    "item_erp": "047457",
+                    "descripcion_xml": "GLINA. TIKYS GOLOCHIPS 6PLEGX24UNX20GR",
+                    "descripcion_erp": "GOLOSINA TIKIS*20g GOLOCHIPS",
+                    "alerta_cruce": "CRUCE EMPAQUE",
+                    "xml_cant": 24.0,
+                    "erp_cant": 24.0,
+                    "xml_total": 26889.0,
+                    "erp_total": 26895.0,
+                    "dif_total": -6.0,
+                }
+            ]
+        )
+
+        ac_frame = _build_ac_explanation_frame(frame)
+
+        self.assertEqual(len(ac_frame), 1)
+        self.assertEqual(
+            str(ac_frame.iloc[0]["ORIGEN_AJUSTE"]),
+            "DIFERENCIA NETA ERP/XML | CRUCE EMPAQUE",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
