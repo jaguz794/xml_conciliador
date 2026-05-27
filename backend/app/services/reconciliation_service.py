@@ -1,6 +1,7 @@
 import json
 import re
 from decimal import Decimal
+from difflib import SequenceMatcher
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
@@ -174,8 +175,65 @@ FULL OUTER JOIN erp_data e
 ORDER BY estado DESC, codigo_barras ASC
 """
 
-CACHE_VERSION = "v7"
+CACHE_VERSION = "v8"
 GLOBAL_TOTAL_TOLERANCE = 1
+
+SIZE_TOKEN_PATTERN = re.compile(
+    r"(\d+(?:[.,]\d+)?)(?:G|GR|GRS|ML)",
+    re.IGNORECASE,
+)
+
+DESCRIPTION_TOKEN_PATTERN = re.compile(r"[A-Z0-9]+")
+
+PACKAGING_DESCRIPTION_TOKENS = {
+    "BJA",
+    "BJAS",
+    "BLS",
+    "BOL",
+    "BOLS",
+    "BOLSA",
+    "BOLSAS",
+    "CAJA",
+    "CAJAS",
+    "CJ",
+    "CJA",
+    "DP",
+    "DPACK",
+    "DPCK",
+    "PACK",
+    "PCK",
+    "PL",
+    "PLE",
+    "PLEG",
+    "PLEGX",
+    "PLEX",
+    "PLG",
+    "PLGX",
+    "PLX",
+    "UD",
+    "UDS",
+    "UDX",
+    "UN",
+    "UND",
+    "UNID",
+    "UNX",
+    "UX",
+    "X",
+}
+
+AC_COLUMNS = [
+    "ITEM_XML",
+    "ITEM_ERP",
+    "DESCRIPCION_XML",
+    "DESCRIPCION_ERP",
+    "CANTIDAD_XML",
+    "CANTIDAD_ERP",
+    "TOTAL_XML",
+    "TOTAL_ERP",
+    "DIF_COSTO_UND",
+    "COSTO_DIF_TOTAL",
+    "ORIGEN_AJUSTE",
+]
 
 NUMERIC_COLUMNS = [
     "xml_cant",
@@ -198,6 +256,22 @@ NUMERIC_COLUMNS = [
 
 def _round_number(value: float) -> float:
     return round(float(value), 2)
+
+
+def _float_value(value: Any) -> float:
+    if value is None or pd.isna(value):
+        return 0.0
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _text_value(value: Any) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    return str(value).strip()
 
 
 def _serialize_scalar(value: Any) -> Any:
@@ -416,6 +490,173 @@ def _coerce_numeric_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
+def _description_tokens(description: Any) -> set[str]:
+    raw_description = _text_value(description).upper()
+    if not raw_description:
+        return set()
+
+    compact_description = re.sub(r"\s+", "", raw_description)
+    tokens = {
+        f"{match.group(1).replace(',', '.')}G"
+        for match in SIZE_TOKEN_PATTERN.finditer(compact_description)
+    }
+
+    normalized_text = re.sub(r"[^A-Z0-9]+", " ", raw_description)
+    for token in DESCRIPTION_TOKEN_PATTERN.findall(normalized_text):
+        if token in PACKAGING_DESCRIPTION_TOKENS:
+            continue
+        if any(char.isdigit() for char in token):
+            continue
+        if len(token) < 3:
+            continue
+        tokens.add(token)
+
+    return tokens
+
+
+def _description_similarity(xml_description: Any, erp_description: Any) -> tuple[int, float]:
+    xml_tokens = _description_tokens(xml_description)
+    erp_tokens = _description_tokens(erp_description)
+    if not xml_tokens or not erp_tokens:
+        return 0, 0.0
+
+    overlap = len(xml_tokens & erp_tokens)
+    xml_text = " ".join(sorted(xml_tokens))
+    erp_text = " ".join(sorted(erp_tokens))
+    sequence_ratio = SequenceMatcher(None, xml_text, erp_text).ratio()
+    return overlap, sequence_ratio
+
+
+def _build_ac_explanation_row(
+    xml_row: pd.Series | None,
+    erp_row: pd.Series | None,
+    origin: str,
+    source_order: int,
+) -> dict[str, Any]:
+    xml_qty = _float_value(xml_row.get("xml_cant")) if xml_row is not None else 0.0
+    erp_qty = _float_value(erp_row.get("erp_cant")) if erp_row is not None else 0.0
+    xml_total = _float_value(xml_row.get("xml_total")) if xml_row is not None else 0.0
+    erp_total = _float_value(erp_row.get("erp_total")) if erp_row is not None else 0.0
+    effective_qty = max(xml_qty, erp_qty, 1.0)
+    net_total = xml_total - erp_total
+
+    return {
+        "ITEM_XML": _text_value(xml_row.get("item_xml")) if xml_row is not None else None,
+        "ITEM_ERP": _text_value(erp_row.get("item_erp")) if erp_row is not None else None,
+        "DESCRIPCION_XML": _text_value(xml_row.get("descripcion_xml")) if xml_row is not None else None,
+        "DESCRIPCION_ERP": _text_value(erp_row.get("descripcion_erp")) if erp_row is not None else None,
+        "CANTIDAD_XML": xml_qty,
+        "CANTIDAD_ERP": erp_qty,
+        "TOTAL_XML": xml_total,
+        "TOTAL_ERP": erp_total,
+        "DIF_COSTO_UND": net_total / effective_qty,
+        "COSTO_DIF_TOTAL": net_total,
+        "ORIGEN_AJUSTE": origin,
+        "_source_order": source_order,
+    }
+
+
+def _build_ac_explanation_frame(items_frame: pd.DataFrame) -> pd.DataFrame:
+    if items_frame.empty:
+        return pd.DataFrame(columns=AC_COLUMNS)
+
+    working = items_frame.copy().reset_index(drop=True)
+    xml_only_indexes = working.index[
+        working["descripcion_xml"].apply(_text_value).ne("")
+        & working["descripcion_erp"].apply(_text_value).eq("")
+    ]
+    erp_only_indexes = working.index[
+        working["descripcion_xml"].apply(_text_value).eq("")
+        & working["descripcion_erp"].apply(_text_value).ne("")
+    ]
+
+    pair_map: dict[int, int] = {}
+    used_erp_indexes: set[int] = set()
+
+    for xml_index in xml_only_indexes:
+        xml_row = working.loc[xml_index]
+        best_match_index: int | None = None
+        best_score: tuple[int, float, float] | None = None
+
+        for erp_index in erp_only_indexes:
+            if erp_index in used_erp_indexes:
+                continue
+
+            erp_row = working.loc[erp_index]
+            overlap, sequence_ratio = _description_similarity(
+                xml_row.get("descripcion_xml"),
+                erp_row.get("descripcion_erp"),
+            )
+            if overlap < 2 and sequence_ratio < 0.62:
+                continue
+
+            total_gap = abs(_float_value(xml_row.get("xml_total")) - _float_value(erp_row.get("erp_total")))
+            score = (overlap, sequence_ratio, -total_gap)
+            if best_score is None or score > best_score:
+                best_match_index = erp_index
+                best_score = score
+
+        if best_match_index is None:
+            continue
+
+        pair_map[xml_index] = best_match_index
+        used_erp_indexes.add(best_match_index)
+
+    explanation_rows: list[dict[str, Any]] = []
+    consumed_indexes: set[int] = set()
+
+    for xml_index, erp_index in pair_map.items():
+        explanation_rows.append(
+            _build_ac_explanation_row(
+                xml_row=working.loc[xml_index],
+                erp_row=working.loc[erp_index],
+                origin="CRUCE NETO ERP/XML",
+                source_order=min(xml_index, erp_index),
+            )
+        )
+        consumed_indexes.add(xml_index)
+        consumed_indexes.add(erp_index)
+
+    for index, row in working.iterrows():
+        if index in consumed_indexes:
+            continue
+
+        xml_present = _text_value(row.get("descripcion_xml")) != ""
+        erp_present = _text_value(row.get("descripcion_erp")) != ""
+        if xml_present and erp_present:
+            origin = "DIFERENCIA NETA ERP/XML"
+            xml_row = row
+            erp_row = row
+        elif xml_present:
+            origin = "SOLO XML"
+            xml_row = row
+            erp_row = None
+        else:
+            origin = "SOLO ERP"
+            xml_row = None
+            erp_row = row
+
+        explanation_rows.append(
+            _build_ac_explanation_row(
+                xml_row=xml_row,
+                erp_row=erp_row,
+                origin=origin,
+                source_order=index,
+            )
+        )
+
+    if not explanation_rows:
+        return pd.DataFrame(columns=AC_COLUMNS)
+
+    ac_frame = pd.DataFrame(explanation_rows)
+    ac_frame = ac_frame[abs(ac_frame["COSTO_DIF_TOTAL"]) >= 1]
+    if ac_frame.empty:
+        return pd.DataFrame(columns=AC_COLUMNS)
+
+    ac_frame = ac_frame.sort_values(by=["_source_order", "ITEM_XML", "ITEM_ERP"], na_position="last")
+    return ac_frame.drop(columns="_source_order").reset_index(drop=True)
+
+
 def _detect_packaging(frame: pd.DataFrame) -> pd.Series:
     xml_qty = frame["xml_cant"].abs()
     erp_qty = frame["erp_cant"].abs()
@@ -491,42 +732,7 @@ def _build_reconciliation_payload(factura: str, nit: str) -> ConciliacionRespons
     ]
     np_frame = np_frame[abs(np_frame["DIF_UND_FISICA"]) > 0]
 
-    ac_frame = items_frame.copy()
-    np_cost_adjustment = (
-        (items_frame["xml_cant"] - items_frame["erp_cant"])
-        * items_frame["erp_precio"].where(items_frame["erp_precio"] > 0, items_frame["xml_precio"])
-    ).where(~packaging_mask, 0)
-    ac_frame["COSTO_DIF_TOTAL"] = ac_frame["dif_total"] - np_cost_adjustment
-    effective_qty = ac_frame["xml_cant"].where(ac_frame["xml_cant"] > 0, ac_frame["erp_cant"]).replace(0, 1)
-    ac_frame["DIF_COSTO_UND"] = ac_frame["COSTO_DIF_TOTAL"] / effective_qty
-    ac_frame["ORIGEN_AJUSTE"] = packaging_mask.map(
-        lambda detected: "EMPAQUE DETECTADO"
-        if detected
-        else "AJUSTE DE COSTO"
-    )
-    ac_frame = ac_frame[
-        [
-            "item_xml",
-            "item_erp",
-            "descripcion_xml",
-            "descripcion_erp",
-            "DIF_COSTO_UND",
-            "xml_cant",
-            "COSTO_DIF_TOTAL",
-            "ORIGEN_AJUSTE",
-        ]
-    ]
-    ac_frame.columns = [
-        "ITEM_XML",
-        "ITEM_ERP",
-        "DESCRIPCION_XML",
-        "DESCRIPCION_ERP",
-        "DIF_COSTO_UND",
-        "CANTIDAD_XML",
-        "COSTO_DIF_TOTAL",
-        "ORIGEN_AJUSTE",
-    ]
-    ac_frame = ac_frame[abs(ac_frame["COSTO_DIF_TOTAL"]) >= 1]
+    ac_frame = _build_ac_explanation_frame(items_frame)
 
     valor_xml = float(items_frame["xml_total"].sum())
     valor_erp = float(items_frame["erp_total"].sum())
@@ -590,7 +796,7 @@ def _build_reconciliation_payload(factura: str, nit: str) -> ConciliacionRespons
         "AJUSTE_UND_SUGERIDO": ajuste_cant_np,
     }
     ac_summary = [
-        TableSummaryItem(label="Total ajuste costo AC", value=_round_number(ajuste_costo_ac)),
+        TableSummaryItem(label="Total neto explicado en AC", value=_round_number(ajuste_costo_ac)),
         TableSummaryItem(label="Total usado en dashboard costo", value=_round_number(total_ajuste_costo)),
         TableSummaryItem(label="Saldo costo por revisar", value=_round_number(saldo_dif_costo)),
     ]
