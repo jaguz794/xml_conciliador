@@ -35,7 +35,8 @@ class Settings(BaseSettings):
     watcher_ready_timeout_seconds: float = 300.0
     folder_consumer_poll_seconds: float = 15.0
     delete_processed_zip_immediately: bool = False
-    processed_zip_retention_days: int = 10
+    processed_zip_retention_days: int = 15
+    reconciliation_cache_retention_days: int = 15
 
     @property
     def cors_origins_list(self) -> list[str]:

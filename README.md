@@ -368,14 +368,15 @@ Referencia oficial:
 
 - [Secrets reference](https://docs.github.com/en/actions/reference/security/secrets)
 
-## Limpieza automatica de ZIP
+## Limpieza automatica de ZIP y cache
 
-La aplicacion ahora incluye un limpiador de `ZIP` procesados:
+La aplicacion ahora incluye un limpiador de archivos viejos de runtime:
 
 - Solo borra archivos `.zip` dentro de `facturas_procesadas`.
+- Borra snapshots viejos dentro de `cache/conciliaciones`.
 - No toca `XML`.
 - No borra archivos subidos desde navegador porque esos hoy se procesan en memoria y no se guardan en disco.
-- La retencion se controla con `PROCESSED_ZIP_RETENTION_DAYS` en el `.env`.
+- La retencion se controla con `PROCESSED_ZIP_RETENTION_DAYS` y `RECONCILIATION_CACHE_RETENTION_DAYS` en el `.env`.
 
 Ejecucion manual:
 
@@ -383,10 +384,10 @@ Ejecucion manual:
 python -m backend.app.cleanup_processed_archives
 ```
 
-En Debian, lo recomendado es correrlo una vez al dia con `cron` o `systemd timer`. Ejemplo con `cron`:
+En Debian, lo recomendado es correrlo una vez al dia con `cron` o `systemd timer`. El proyecto incluye `scripts/cleanup_server.sh`, que por defecto limpia `ZIP` y cache de mas de `15` dias. Ejemplo con `cron`:
 
 ```cron
-0 2 * * * cd /opt/xml_conciliador && /opt/xml_conciliador/.venv/bin/python -m backend.app.cleanup_processed_archives >> /var/log/xml_conciliador_zip_cleanup.log 2>&1
+0 2 * * * cd /opt/xml_conciliador && bash scripts/cleanup_server.sh >> /var/log/xml_conciliador_cleanup.log 2>&1
 ```
 
 ## Cargue masivo por Samba
