@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     delete_processed_zip_immediately: bool = False
     processed_zip_retention_days: int = 15
     reconciliation_cache_retention_days: int = 15
+    auth_session_hours: int = 12
+    auth_default_admin_username: str = "admin"
+    auth_default_admin_password: str = "Cambiar123!"
+    auth_default_admin_name: str = "Administrador"
 
     @property
     def cors_origins_list(self) -> list[str]:

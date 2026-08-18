@@ -70,3 +70,44 @@ export interface ProcessedBatchResponse {
   procesadas: ProcessedInvoice[];
   total_procesadas: number;
 }
+
+export interface AuthUser {
+  id: number;
+  username: string;
+  full_name: string;
+  is_admin: boolean;
+  is_active: boolean;
+  last_login_at: string | null;
+  created_at: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  expires_at: string;
+  user: AuthUser;
+}
+
+export interface UserSummary {
+  id: number;
+  username: string;
+  full_name: string;
+  is_admin: boolean;
+  is_active: boolean;
+  last_login_at: string | null;
+  last_activity_at: string | null;
+  created_at: string;
+  total_consultas: number;
+  total_ingestas: number;
+  total_eventos: number;
+}
+
+export interface UserActivityItem {
+  id: number;
+  action: string;
+  target_nit: string | null;
+  target_factura: string | null;
+  detail: string | null;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string;
+}

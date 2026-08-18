@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -5,6 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.api.router import api_router
 from backend.app.core.config import settings
 from backend.app.db import DatabaseUnavailableError
+from backend.app.services.auth_service import initialize_auth_system
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title=settings.app_name,
@@ -21,6 +26,14 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix=settings.api_prefix)
+
+
+@app.on_event("startup")
+def startup() -> None:
+    try:
+        initialize_auth_system()
+    except DatabaseUnavailableError as exc:
+        logger.warning("No fue posible inicializar autenticacion en el arranque: %s", exc)
 
 
 @app.exception_handler(DatabaseUnavailableError)

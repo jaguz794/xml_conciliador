@@ -205,6 +205,28 @@ input,
   background: rgba(255, 255, 255, 0.9);
 }
 
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-card {
+  width: min(560px, 100%);
+  display: grid;
+  gap: 18px;
+}
+
+.auth-form {
+  margin-top: 6px;
+}
+
+.auth-health {
+  border-top: 1px solid rgba(49, 78, 61, 0.08);
+  padding-top: 10px;
+}
+
 .file-picker {
   display: flex;
   justify-content: space-between;
@@ -279,6 +301,27 @@ input,
   gap: 14px;
   padding: 10px 0;
   border-bottom: 1px solid rgba(49, 78, 61, 0.08);
+}
+
+.session-card {
+  gap: 14px;
+}
+
+.session-meta {
+  display: grid;
+  gap: 10px;
+}
+
+.session-meta article {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(49, 78, 61, 0.08);
+}
+
+.session-meta article:last-child {
+  border-bottom: 0;
 }
 
 .health-list article:last-child,
@@ -399,6 +442,12 @@ input,
   flex-wrap: wrap;
 }
 
+.workspace-switcher {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .tab-button {
   padding: 11px 15px;
   background: rgba(255, 255, 255, 0.82);
@@ -418,6 +467,90 @@ input,
 
 .table-wrap {
   overflow: auto;
+}
+
+.panel-grid {
+  display: grid;
+  gap: 18px;
+}
+
+.admin-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.user-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.user-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  text-align: left;
+  border-radius: 18px;
+  border: 1px solid rgba(31, 177, 84, 0.12);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(246, 251, 238, 0.96));
+  color: #213130;
+}
+
+.user-card.active {
+  border-color: rgba(10, 143, 74, 0.42);
+  box-shadow: 0 10px 28px rgba(10, 143, 74, 0.14);
+}
+
+.user-card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.user-card-stats {
+  display: grid;
+  gap: 8px;
+}
+
+.user-card-stats article {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.9rem;
+}
+
+.inline-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.inline-badge.ok {
+  background: rgba(31, 177, 84, 0.16);
+  color: #237246;
+}
+
+.inline-badge.warn {
+  background: rgba(255, 232, 29, 0.2);
+  color: #6d5d13;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.toggle-row input {
+  width: auto;
+}
+
+.activity-table {
+  min-width: 760px;
 }
 
 .data-table {
@@ -541,13 +674,18 @@ input,
   .result-header,
   .hero-card,
   .panel-header,
-  .brand-top {
+  .brand-top,
+  .user-card-top {
     flex-direction: column;
     align-items: flex-start;
   }
 
   .result-actions {
     width: 100%;
+  }
+
+  .admin-grid {
+    grid-template-columns: 1fr;
   }
 
   .brand-logo-shell {

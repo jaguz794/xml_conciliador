@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -78,3 +79,64 @@ class ProcessedBatchResponse(BaseModel):
 
 class ScanFolderRequest(BaseModel):
     move_processed: bool = False
+
+
+class AuthUser(BaseModel):
+    id: int
+    username: str
+    full_name: str
+    is_admin: bool
+    is_active: bool
+    last_login_at: datetime | None = None
+    created_at: datetime
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    token: str
+    expires_at: datetime
+    user: AuthUser
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    full_name: str
+    password: str
+    is_admin: bool = False
+    is_active: bool = True
+
+
+class UpdateUserRequest(BaseModel):
+    full_name: str | None = None
+    password: str | None = None
+    is_admin: bool | None = None
+    is_active: bool | None = None
+
+
+class UserSummary(BaseModel):
+    id: int
+    username: str
+    full_name: str
+    is_admin: bool
+    is_active: bool
+    last_login_at: datetime | None = None
+    last_activity_at: datetime | None = None
+    created_at: datetime
+    total_consultas: int = 0
+    total_ingestas: int = 0
+    total_eventos: int = 0
+
+
+class UserActivityItem(BaseModel):
+    id: int
+    action: str
+    target_nit: str | None = None
+    target_factura: str | None = None
+    detail: str | None = None
+    ip_address: str | None = None
+    user_agent: str | None = None
+    created_at: datetime

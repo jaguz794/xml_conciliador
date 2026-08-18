@@ -75,6 +75,15 @@ Abre `.env` y ajusta si hace falta:
 
 Si vas a correr el frontend en otro puerto o dominio, agrega ese origen en `CORS_ORIGINS`.
 
+Si vas a activar acceso por usuarios, ajusta tambien:
+
+- `AUTH_SESSION_HOURS`
+- `AUTH_DEFAULT_ADMIN_USERNAME`
+- `AUTH_DEFAULT_ADMIN_PASSWORD`
+- `AUTH_DEFAULT_ADMIN_NAME`
+
+La primera vez que inicie la API, si no existen usuarios en la tabla interna, se crea automaticamente ese administrador inicial.
+
 ### 3. Crear entorno virtual e instalar backend
 
 ```powershell
@@ -169,6 +178,13 @@ Ese proceso vuelve a escanear la carpeta, espera a que el archivo termine de cop
 
 - `GET /api/salud`
 - `GET /api/salud/db`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
+- `GET /api/auth/users`
+- `GET /api/auth/users/{user_id}/activity`
+- `POST /api/auth/users`
+- `PATCH /api/auth/users/{user_id}`
 - `GET /api/facturas`
 - `GET /api/conciliaciones/{nit}/{factura}`
 - `POST /api/ingesta/archivo`
@@ -187,6 +203,7 @@ Ese proceso vuelve a escanear la carpeta, espera a que el archivo termine de cop
 ## Notas importantes
 
 - Esta version ya no genera Excel.
+- La interfaz ahora puede operar con usuarios autenticados y deja log de ingresos, consultas e ingestas.
 - `AC` y `NP` se calculan en backend a partir del mismo cruce que antes alimentaba el Excel.
 - No se hicieron cambios destructivos sobre tu carpeta `app/` legacy.
 - La tabla `factura_xml_detalle` sigue siendo la base del almacenamiento XML.
