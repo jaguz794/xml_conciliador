@@ -111,3 +111,8 @@ export interface UserActivityItem {
   user_agent: string | null;
   created_at: string;
 }
+
+export interface UserDailyConsultationItem {
+  date: string;
+  total_consultas: number;
+}

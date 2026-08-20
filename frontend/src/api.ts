@@ -7,6 +7,7 @@ import type {
   LoginResponse,
   ProcessedBatchResponse,
   UserActivityItem,
+  UserDailyConsultationItem,
   UserSummary,
 } from "./types";
 
@@ -117,6 +118,18 @@ export async function fetchUserActivity(
     headers: buildAuthHeaders(token),
   });
   return parseResponse<UserActivityItem[]>(response);
+}
+
+export async function fetchUserDailyConsultations(
+  token: string,
+  userId: number,
+  limit = 30,
+): Promise<UserDailyConsultationItem[]> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  const response = await fetch(`${API_BASE_URL}/auth/users/${userId}/daily-consultations?${query.toString()}`, {
+    headers: buildAuthHeaders(token),
+  });
+  return parseResponse<UserDailyConsultationItem[]>(response);
 }
 
 export async function createUser(

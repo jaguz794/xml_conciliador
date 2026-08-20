@@ -553,6 +553,10 @@ input,
   min-width: 760px;
 }
 
+.daily-consultation-table {
+  min-width: 420px;
+}
+
 .data-table {
   width: 100%;
   border-collapse: collapse;

@@ -8,6 +8,7 @@ from backend.app.models.schemas import (
     LoginResponse,
     UpdateUserRequest,
     UserActivityItem,
+    UserDailyConsultationItem,
     UserSummary,
 )
 from backend.app.services.auth_service import (
@@ -17,6 +18,7 @@ from backend.app.services.auth_service import (
     authenticate_user,
     create_user,
     list_user_activity,
+    list_user_daily_consultations,
     list_users_with_stats,
     log_user_action,
     revoke_session,
@@ -56,6 +58,15 @@ def get_user_activity(
     _: SessionContext = Depends(get_admin_session),
 ) -> list[UserActivityItem]:
     return list_user_activity(user_id, limit=limit)
+
+
+@router.get("/users/{user_id}/daily-consultations", response_model=list[UserDailyConsultationItem])
+def get_user_daily_consultations(
+    user_id: int,
+    limit: int = Query(default=30, ge=1, le=365),
+    _: SessionContext = Depends(get_admin_session),
+) -> list[UserDailyConsultationItem]:
+    return list_user_daily_consultations(user_id, limit=limit)
 
 
 @router.post("/users", response_model=AuthUser, status_code=status.HTTP_201_CREATED)

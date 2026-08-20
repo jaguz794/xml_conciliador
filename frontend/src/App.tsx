@@ -10,6 +10,7 @@ import {
   fetchInvoices,
   fetchReconciliation,
   fetchUserActivity,
+  fetchUserDailyConsultations,
   fetchUsers,
   getStoredAuthToken,
   login,
@@ -29,6 +30,7 @@ import type {
   HealthResponse,
   ProcessedBatchResponse,
   UserActivityItem,
+  UserDailyConsultationItem,
   UserSummary,
 } from "./types";
 
@@ -82,6 +84,16 @@ function formatDateTime(value: string | null | undefined): string {
   }).format(new Date(value));
 }
 
+function formatDate(value: string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+
+  return new Intl.DateTimeFormat("es-CO", {
+    dateStyle: "medium",
+  }).format(new Date(`${value}T00:00:00`));
+}
+
 function App() {
   const [authToken, setAuthToken] = useState<string | null>(() => getStoredAuthToken());
   const [sessionReady, setSessionReady] = useState(false);
@@ -110,6 +122,7 @@ function App() {
   const [managedUsers, setManagedUsers] = useState<UserSummary[]>([]);
   const [selectedManagedUserId, setSelectedManagedUserId] = useState<number | null>(null);
   const [userActivity, setUserActivity] = useState<UserActivityItem[]>([]);
+  const [userDailyConsultations, setUserDailyConsultations] = useState<UserDailyConsultationItem[]>([]);
   const [loadingAdminData, setLoadingAdminData] = useState(false);
   const [userAdminStatus, setUserAdminStatus] = useState("");
   const [creatingUser, setCreatingUser] = useState(false);
@@ -198,6 +211,7 @@ function App() {
       setManagedUsers([]);
       setSelectedManagedUserId(null);
       setUserActivity([]);
+      setUserDailyConsultations([]);
       setWorkspaceView("conciliador");
     });
   }
@@ -238,12 +252,18 @@ function App() {
     try {
       const users = await fetchUsers(token);
       const targetUserId = focusUserId ?? selectedManagedUserId ?? users[0]?.id ?? null;
-      const activity = targetUserId ? await fetchUserActivity(token, targetUserId) : [];
+      const [activity, dailyConsultations] = targetUserId
+        ? await Promise.all([
+            fetchUserActivity(token, targetUserId),
+            fetchUserDailyConsultations(token, targetUserId),
+          ])
+        : [[], []];
 
       startTransition(() => {
         setManagedUsers(users);
         setSelectedManagedUserId(targetUserId);
         setUserActivity(activity);
+        setUserDailyConsultations(dailyConsultations);
       });
     } catch (adminError) {
       handleProtectedError(adminError, "No fue posible cargar la auditoria de usuarios.");
@@ -259,10 +279,14 @@ function App() {
 
     setLoadingAdminData(true);
     try {
-      const activity = await fetchUserActivity(authToken, userId);
+      const [activity, dailyConsultations] = await Promise.all([
+        fetchUserActivity(authToken, userId),
+        fetchUserDailyConsultations(authToken, userId),
+      ]);
       startTransition(() => {
         setSelectedManagedUserId(userId);
         setUserActivity(activity);
+        setUserDailyConsultations(dailyConsultations);
       });
     } catch (activityError) {
       handleProtectedError(activityError, "No fue posible cargar la actividad del usuario.");
@@ -749,7 +773,7 @@ function App() {
               <div className="panel-header stacked">
                 <div>
                   <h3>Resumen de usuarios</h3>
-                  <p>Consulta el ultimo ingreso y el total de consultas ejecutadas por cada usuario.</p>
+                  <p>Consulta el ultimo ingreso, el total acumulado y el detalle diario de consultas por usuario.</p>
                 </div>
               </div>
               <div className="user-grid">
@@ -917,6 +941,44 @@ function App() {
                 )}
               </section>
             </div>
+
+            <section className="panel">
+              <div className="panel-header stacked">
+                <div>
+                  <h3>Consultas por fecha</h3>
+                  <p>Conteo diario de consultas exitosas del usuario seleccionado.</p>
+                </div>
+              </div>
+
+              {selectedManagedUser ? (
+                userDailyConsultations.length > 0 ? (
+                  <div className="table-wrap">
+                    <table className="data-table daily-consultation-table">
+                      <thead>
+                        <tr>
+                          <th>Fecha</th>
+                          <th>Consultas</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {userDailyConsultations.map((item) => (
+                          <tr key={item.date}>
+                            <td>{formatDate(item.date)}</td>
+                            <td>{formatDisplayNumber(item.total_consultas)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="empty-state compact">
+                    Aun no hay consultas exitosas registradas para este usuario.
+                  </div>
+                )
+              ) : (
+                <div className="empty-state compact">Selecciona un usuario para ver sus consultas por fecha.</div>
+              )}
+            </section>
 
             <section className="panel">
               <div className="panel-header stacked">

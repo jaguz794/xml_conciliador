@@ -12,7 +12,13 @@ from fastapi import HTTPException, Request, status
 
 from backend.app.core.config import settings
 from backend.app.db import get_cursor
-from backend.app.models.schemas import AuthUser, LoginResponse, UserActivityItem, UserSummary
+from backend.app.models.schemas import (
+    AuthUser,
+    LoginResponse,
+    UserActivityItem,
+    UserDailyConsultationItem,
+    UserSummary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -455,6 +461,32 @@ def list_user_activity(user_id: int, limit: int = 50) -> list[UserActivityItem]:
         rows = cursor.fetchall()
 
     return [UserActivityItem(**row) for row in rows]
+
+
+def list_user_daily_consultations(user_id: int, limit: int = 30) -> list[UserDailyConsultationItem]:
+    with get_cursor(dictionary=True) as (_, cursor):
+        cursor.execute(
+            """
+            SELECT
+                (created_at AT TIME ZONE %s)::date AS date,
+                COUNT(*)::int AS total_consultas
+            FROM app_user_access_logs
+            WHERE user_id = %s
+              AND action = %s
+            GROUP BY 1
+            ORDER BY date DESC
+            LIMIT %s
+            """,
+            (
+                settings.auth_reporting_timezone,
+                user_id,
+                ACTION_VIEW_RECONCILIATION,
+                limit,
+            ),
+        )
+        rows = cursor.fetchall()
+
+    return [UserDailyConsultationItem(**row) for row in rows]
 
 
 def authenticate_user(username: str, password: str, request: Request) -> LoginResponse:

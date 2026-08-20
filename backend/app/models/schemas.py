@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -140,3 +140,8 @@ class UserActivityItem(BaseModel):
     ip_address: str | None = None
     user_agent: str | None = None
     created_at: datetime
+
+
+class UserDailyConsultationItem(BaseModel):
+    date: date
+    total_consultas: int = 0
