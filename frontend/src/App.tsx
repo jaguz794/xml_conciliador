@@ -141,6 +141,7 @@ function App() {
   const [passwordChangeForm, setPasswordChangeForm] = useState(EMPTY_PASSWORD_CHANGE_FORM);
   const [passwordChangeStatus, setPasswordChangeStatus] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
+  const [isPasswordPanelOpen, setIsPasswordPanelOpen] = useState(false);
 
   const selectedManagedUser =
     managedUsers.find((user) => user.id === selectedManagedUserId) ?? null;
@@ -229,6 +230,7 @@ function App() {
       setUserDailyConsultations([]);
       setWorkspaceView("conciliador");
       setPasswordChangeForm(EMPTY_PASSWORD_CHANGE_FORM);
+      setIsPasswordPanelOpen(false);
     });
   }
 
@@ -769,17 +771,22 @@ function App() {
               <strong>{formatDateTime(currentUser.last_login_at)}</strong>
             </article>
           </div>
-        </section>
-
-        <section className="panel">
-          <div className="panel-header stacked">
-            <div>
-              <h3>Cambiar contrasena</h3>
-              <p>Actualiza tu clave personal cuando lo necesites.</p>
-            </div>
+          <div className="session-action-stack">
+            <button
+              className="secondary-button accordion-toggle"
+              type="button"
+              onClick={() => setIsPasswordPanelOpen((current) => !current)}
+              aria-expanded={isPasswordPanelOpen}
+            >
+              {isPasswordPanelOpen ? "Ocultar cambio de contrasena" : "Mostrar cambio de contrasena"}
+            </button>
+            {isPasswordPanelOpen ? (
+              <div className="accordion-content">
+                {passwordChangeFormPanel}
+                {passwordChangeStatus ? <p className="helper-text">{passwordChangeStatus}</p> : null}
+              </div>
+            ) : null}
           </div>
-          {passwordChangeFormPanel}
-          {passwordChangeStatus ? <p className="helper-text">{passwordChangeStatus}</p> : null}
         </section>
 
         <section className="panel">

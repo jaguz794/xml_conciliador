@@ -307,6 +307,11 @@ input,
   gap: 14px;
 }
 
+.session-action-stack {
+  display: grid;
+  gap: 12px;
+}
+
 .session-meta {
   display: grid;
   gap: 10px;
@@ -322,6 +327,18 @@ input,
 
 .session-meta article:last-child {
   border-bottom: 0;
+}
+
+.accordion-toggle {
+  width: 100%;
+  justify-content: center;
+}
+
+.accordion-content {
+  display: grid;
+  gap: 12px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(49, 78, 61, 0.08);
 }
 
 .health-list article:last-child,
