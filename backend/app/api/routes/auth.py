@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from backend.app.api.dependencies import get_admin_session, get_current_session
 from backend.app.models.schemas import (
     AuthUser,
+    ChangePasswordRequest,
     CreateUserRequest,
     LoginRequest,
     LoginResponse,
@@ -12,10 +13,12 @@ from backend.app.models.schemas import (
     UserSummary,
 )
 from backend.app.services.auth_service import (
+    ACTION_CHANGE_PASSWORD,
     ACTION_CREATE_USER,
     ACTION_UPDATE_USER,
     SessionContext,
     authenticate_user,
+    change_current_user_password,
     create_user,
     list_user_activity,
     list_user_daily_consultations,
@@ -44,6 +47,30 @@ def logout(
 @router.get("/me", response_model=AuthUser)
 def me(session: SessionContext = Depends(get_current_session)) -> AuthUser:
     return session.user
+
+
+@router.post("/change-password", response_model=AuthUser)
+def change_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    session: SessionContext = Depends(get_current_session),
+) -> AuthUser:
+    try:
+        updated = change_current_user_password(
+            session,
+            current_password=payload.current_password,
+            new_password=payload.new_password,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    log_user_action(
+        session,
+        action=ACTION_CHANGE_PASSWORD,
+        request=request,
+        detail="Cambio de contrasena ejecutado por el usuario.",
+    )
+    return updated
 
 
 @router.get("/users", response_model=list[UserSummary])
@@ -82,6 +109,7 @@ def create_app_user(
             password=payload.password,
             is_admin=payload.is_admin,
             is_active=payload.is_active,
+            must_change_password=payload.must_change_password,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -109,6 +137,7 @@ def update_app_user(
             password=payload.password,
             is_admin=payload.is_admin,
             is_active=payload.is_active,
+            must_change_password=payload.must_change_password,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

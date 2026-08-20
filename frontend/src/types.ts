@@ -77,6 +77,7 @@ export interface AuthUser {
   full_name: string;
   is_admin: boolean;
   is_active: boolean;
+  must_change_password: boolean;
   last_login_at: string | null;
   created_at: string;
 }
@@ -93,6 +94,7 @@ export interface UserSummary {
   full_name: string;
   is_admin: boolean;
   is_active: boolean;
+  must_change_password: boolean;
   last_login_at: string | null;
   last_activity_at: string | null;
   created_at: string;

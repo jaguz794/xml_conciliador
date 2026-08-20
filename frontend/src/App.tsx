@@ -2,6 +2,7 @@ import { startTransition, useEffect, useState, type FormEvent } from "react";
 
 import {
   ApiError,
+  changePassword,
   clearStoredAuthToken,
   createUser,
   fetchCurrentUser,
@@ -50,6 +51,7 @@ const EMPTY_CREATE_USER_FORM = {
   password: "",
   is_admin: false,
   is_active: true,
+  must_change_password: true,
 };
 
 const EMPTY_EDIT_USER_FORM = {
@@ -57,6 +59,13 @@ const EMPTY_EDIT_USER_FORM = {
   password: "",
   is_admin: false,
   is_active: true,
+  must_change_password: false,
+};
+
+const EMPTY_PASSWORD_CHANGE_FORM = {
+  current_password: "",
+  new_password: "",
+  confirm_password: "",
 };
 
 function formatBatchMessage(result: ProcessedBatchResponse): string {
@@ -129,6 +138,9 @@ function App() {
   const [savingUserChanges, setSavingUserChanges] = useState(false);
   const [newUserForm, setNewUserForm] = useState(EMPTY_CREATE_USER_FORM);
   const [userEditForm, setUserEditForm] = useState(EMPTY_EDIT_USER_FORM);
+  const [passwordChangeForm, setPasswordChangeForm] = useState(EMPTY_PASSWORD_CHANGE_FORM);
+  const [passwordChangeStatus, setPasswordChangeStatus] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
 
   const selectedManagedUser =
     managedUsers.find((user) => user.id === selectedManagedUserId) ?? null;
@@ -148,6 +160,7 @@ function App() {
         password: "",
         is_admin: selectedManagedUser.is_admin,
         is_active: selectedManagedUser.is_active,
+        must_change_password: selectedManagedUser.must_change_password,
       });
       return;
     }
@@ -189,9 +202,11 @@ function App() {
         setAuthToken(storedToken);
         setCurrentUser(user);
       });
-      await refreshInvoices(storedToken);
-      if (user.is_admin) {
-        await refreshAdminData(storedToken);
+      if (!user.must_change_password) {
+        await refreshInvoices(storedToken);
+        if (user.is_admin) {
+          await refreshAdminData(storedToken);
+        }
       }
     } catch {
       clearSessionState();
@@ -213,6 +228,7 @@ function App() {
       setUserActivity([]);
       setUserDailyConsultations([]);
       setWorkspaceView("conciliador");
+      setPasswordChangeForm(EMPTY_PASSWORD_CHANGE_FORM);
     });
   }
 
@@ -315,10 +331,17 @@ function App() {
         setWorkspaceView("conciliador");
       });
       setAuthMessage("");
+      setPasswordChangeStatus("");
       setLoginPassword("");
-      await refreshInvoices(loginResult.token);
-      if (loginResult.user.is_admin) {
-        await refreshAdminData(loginResult.token);
+      setPasswordChangeForm((current) => ({
+        ...current,
+        current_password: loginPassword,
+      }));
+      if (!loginResult.user.must_change_password) {
+        await refreshInvoices(loginResult.token);
+        if (loginResult.user.is_admin) {
+          await refreshAdminData(loginResult.token);
+        }
       }
     } catch (loginError) {
       setAuthMessage(loginError instanceof Error ? loginError.message : "No fue posible iniciar sesion.");
@@ -490,6 +513,7 @@ function App() {
         password: userEditForm.password.trim() || undefined,
         is_admin: userEditForm.is_admin,
         is_active: userEditForm.is_active,
+        must_change_password: userEditForm.must_change_password,
       });
 
       if (currentUser && currentUser.id === updatedUser.id) {
@@ -510,6 +534,95 @@ function App() {
       setSavingUserChanges(false);
     }
   }
+
+  async function handleChangePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!authToken || !currentUser) {
+      return;
+    }
+
+    if (!passwordChangeForm.current_password.trim() || !passwordChangeForm.new_password.trim()) {
+      setPasswordChangeStatus("Debes ingresar la contrasena actual y la nueva.");
+      return;
+    }
+
+    if (passwordChangeForm.new_password !== passwordChangeForm.confirm_password) {
+      setPasswordChangeStatus("La confirmacion de la nueva contrasena no coincide.");
+      return;
+    }
+
+    setChangingPassword(true);
+    setPasswordChangeStatus("");
+
+    try {
+      const updatedUser = await changePassword(
+        authToken,
+        passwordChangeForm.current_password,
+        passwordChangeForm.new_password,
+      );
+      startTransition(() => {
+        setCurrentUser(updatedUser);
+        setPasswordChangeForm(EMPTY_PASSWORD_CHANGE_FORM);
+      });
+      setPasswordChangeStatus("Contrasena actualizada correctamente.");
+
+      await refreshInvoices(authToken);
+      if (updatedUser.is_admin) {
+        await refreshAdminData(authToken, updatedUser.id);
+      }
+    } catch (passwordError) {
+      if (passwordError instanceof ApiError && passwordError.status === 401) {
+        handleProtectedError(passwordError, "La sesion vencio.");
+      } else {
+        setPasswordChangeStatus(
+          passwordError instanceof Error ? passwordError.message : "No fue posible cambiar la contrasena.",
+        );
+      }
+    } finally {
+      setChangingPassword(false);
+    }
+  }
+
+  const passwordChangeFormPanel = (
+    <form className="search-form" onSubmit={handleChangePassword}>
+      <label>
+        <span>Contrasena actual</span>
+        <input
+          type="password"
+          value={passwordChangeForm.current_password}
+          onChange={(event) =>
+            setPasswordChangeForm((current) => ({ ...current, current_password: event.target.value }))
+          }
+          placeholder="Ingresa tu contrasena actual"
+        />
+      </label>
+      <label>
+        <span>Nueva contrasena</span>
+        <input
+          type="password"
+          value={passwordChangeForm.new_password}
+          onChange={(event) =>
+            setPasswordChangeForm((current) => ({ ...current, new_password: event.target.value }))
+          }
+          placeholder="Minimo 8 caracteres"
+        />
+      </label>
+      <label>
+        <span>Confirmar nueva contrasena</span>
+        <input
+          type="password"
+          value={passwordChangeForm.confirm_password}
+          onChange={(event) =>
+            setPasswordChangeForm((current) => ({ ...current, confirm_password: event.target.value }))
+          }
+          placeholder="Repite la nueva contrasena"
+        />
+      </label>
+      <button className="primary-button" type="submit" disabled={changingPassword}>
+        {changingPassword ? "Guardando..." : "Cambiar contrasena"}
+      </button>
+    </form>
+  );
 
   const acEmptyMessage = result
     ? result.ac.rows.length === 0 && Math.abs(result.dashboard.costo.saldo) >= 1
@@ -583,6 +696,34 @@ function App() {
     );
   }
 
+  if (currentUser.must_change_password) {
+    return (
+      <div className="auth-shell">
+        <section className="brand-card auth-card">
+          <div className="brand-copy">
+            <p className="eyebrow">Cambio obligatorio</p>
+            <h1>Actualiza tu contrasena</h1>
+            <p>
+              Tu usuario fue creado o reiniciado con una contrasena temporal. Debes cambiarla antes de consultar
+              facturas o procesar archivos.
+            </p>
+            <p>
+              Usuario actual: <strong>{currentUser.username}</strong>
+            </p>
+          </div>
+
+          {passwordChangeFormPanel}
+
+          {passwordChangeStatus ? <p className="helper-text">{passwordChangeStatus}</p> : null}
+
+          <button className="secondary-button" type="button" onClick={handleLogout}>
+            Cerrar sesion
+          </button>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -620,10 +761,25 @@ function App() {
               <strong>{currentUser.is_admin ? "Administrador" : "Consulta"}</strong>
             </article>
             <article>
+              <span>Clave</span>
+              <strong>{currentUser.must_change_password ? "Cambio pendiente" : "Actualizada"}</strong>
+            </article>
+            <article>
               <span>Ultimo ingreso</span>
               <strong>{formatDateTime(currentUser.last_login_at)}</strong>
             </article>
           </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-header stacked">
+            <div>
+              <h3>Cambiar contrasena</h3>
+              <p>Actualiza tu clave personal cuando lo necesites.</p>
+            </div>
+          </div>
+          {passwordChangeFormPanel}
+          {passwordChangeStatus ? <p className="helper-text">{passwordChangeStatus}</p> : null}
         </section>
 
         <section className="panel">
@@ -786,9 +942,14 @@ function App() {
                   >
                     <div className="user-card-top">
                       <strong>{user.full_name}</strong>
-                      <span className={user.is_active ? "inline-badge ok" : "inline-badge warn"}>
-                        {user.is_active ? "Activo" : "Inactivo"}
-                      </span>
+                      <div className="badge-stack">
+                        <span className={user.is_active ? "inline-badge ok" : "inline-badge warn"}>
+                          {user.is_active ? "Activo" : "Inactivo"}
+                        </span>
+                        {user.must_change_password ? (
+                          <span className="inline-badge warn">Cambio de clave pendiente</span>
+                        ) : null}
+                      </div>
                     </div>
                     <span>@{user.username}</span>
                     <small>{user.is_admin ? "Administrador" : "Consulta"}</small>
@@ -849,7 +1010,7 @@ function App() {
                       onChange={(event) =>
                         setNewUserForm((current) => ({ ...current, password: event.target.value }))
                       }
-                      placeholder="Minimo 8 caracteres"
+                      placeholder="Usa 123456 si sera temporal"
                     />
                   </label>
                   <label className="toggle-row">
@@ -871,6 +1032,19 @@ function App() {
                       }
                     />
                     <span>Usuario activo</span>
+                  </label>
+                  <label className="toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={newUserForm.must_change_password}
+                      onChange={(event) =>
+                        setNewUserForm((current) => ({
+                          ...current,
+                          must_change_password: event.target.checked,
+                        }))
+                      }
+                    />
+                    <span>Debe cambiar contrasena al ingresar</span>
                   </label>
                   <button className="primary-button" type="submit" disabled={creatingUser}>
                     {creatingUser ? "Creando..." : "Crear usuario"}
@@ -931,6 +1105,19 @@ function App() {
                         }
                       />
                       <span>Activo</span>
+                    </label>
+                    <label className="toggle-row">
+                      <input
+                        type="checkbox"
+                        checked={userEditForm.must_change_password}
+                        onChange={(event) =>
+                          setUserEditForm((current) => ({
+                            ...current,
+                            must_change_password: event.target.checked,
+                          }))
+                        }
+                      />
+                      <span>Solicitar cambio de contrasena al ingresar</span>
                     </label>
                     <button className="primary-button" type="submit" disabled={savingUserChanges}>
                       {savingUserChanges ? "Guardando..." : "Guardar cambios"}

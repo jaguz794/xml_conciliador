@@ -507,6 +507,13 @@ input,
   align-items: center;
 }
 
+.badge-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .user-card-stats {
   display: grid;
   gap: 8px;

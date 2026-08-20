@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
-from backend.app.api.dependencies import get_current_session
+from backend.app.api.dependencies import get_application_session
 from backend.app.models.schemas import ProcessedBatchResponse, ScanFolderRequest
 from backend.app.services.ingestion_service import process_uploaded_file, scan_input_directory
 from backend.app.services.auth_service import (
@@ -17,7 +17,7 @@ router = APIRouter()
 async def upload_invoice_file(
     request: Request,
     file: UploadFile = File(...),
-    session: SessionContext = Depends(get_current_session),
+    session: SessionContext = Depends(get_application_session),
 ) -> ProcessedBatchResponse:
     if not file.filename:
         raise HTTPException(status_code=400, detail="El archivo debe tener nombre.")
@@ -40,7 +40,7 @@ async def upload_invoice_file(
 def scan_folder(
     payload: ScanFolderRequest,
     request: Request,
-    session: SessionContext = Depends(get_current_session),
+    session: SessionContext = Depends(get_application_session),
 ) -> ProcessedBatchResponse:
     try:
         result = scan_input_directory(move_processed=payload.move_processed)

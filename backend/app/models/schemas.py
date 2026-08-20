@@ -87,6 +87,7 @@ class AuthUser(BaseModel):
     full_name: str
     is_admin: bool
     is_active: bool
+    must_change_password: bool = False
     last_login_at: datetime | None = None
     created_at: datetime
 
@@ -108,6 +109,7 @@ class CreateUserRequest(BaseModel):
     password: str
     is_admin: bool = False
     is_active: bool = True
+    must_change_password: bool = True
 
 
 class UpdateUserRequest(BaseModel):
@@ -115,6 +117,12 @@ class UpdateUserRequest(BaseModel):
     password: str | None = None
     is_admin: bool | None = None
     is_active: bool | None = None
+    must_change_password: bool | None = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 
 class UserSummary(BaseModel):
@@ -123,6 +131,7 @@ class UserSummary(BaseModel):
     full_name: str
     is_admin: bool
     is_active: bool
+    must_change_password: bool = False
     last_login_at: datetime | None = None
     last_activity_at: datetime | None = None
     created_at: datetime

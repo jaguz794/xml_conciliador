@@ -101,6 +101,20 @@ export async function fetchCurrentUser(token: string): Promise<AuthUser> {
   return parseResponse<AuthUser>(response);
 }
 
+export async function changePassword(token: string, currentPassword: string, newPassword: string): Promise<AuthUser> {
+  const response = await fetch(`${API_BASE_URL}/auth/change-password`, {
+    method: "POST",
+    headers: buildAuthHeaders(token, {
+      "Content-Type": "application/json",
+    }),
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  });
+  return parseResponse<AuthUser>(response);
+}
+
 export async function fetchUsers(token: string): Promise<UserSummary[]> {
   const response = await fetch(`${API_BASE_URL}/auth/users`, {
     headers: buildAuthHeaders(token),
@@ -140,6 +154,7 @@ export async function createUser(
     password: string;
     is_admin: boolean;
     is_active: boolean;
+    must_change_password: boolean;
   },
 ): Promise<AuthUser> {
   const response = await fetch(`${API_BASE_URL}/auth/users`, {
@@ -160,6 +175,7 @@ export async function updateUser(
     password?: string;
     is_admin?: boolean;
     is_active?: boolean;
+    must_change_password?: boolean;
   },
 ): Promise<AuthUser> {
   const response = await fetch(`${API_BASE_URL}/auth/users/${userId}`, {

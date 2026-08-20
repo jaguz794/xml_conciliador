@@ -31,8 +31,11 @@ ACTION_UPLOAD_FILE = "UPLOAD_FILE"
 ACTION_SCAN_INPUT_FOLDER = "SCAN_INPUT_FOLDER"
 ACTION_CREATE_USER = "CREATE_USER"
 ACTION_UPDATE_USER = "UPDATE_USER"
+ACTION_CHANGE_PASSWORD = "CHANGE_PASSWORD"
 
 PASSWORD_ITERATIONS = 390_000
+MIN_PASSWORD_LENGTH = 8
+TEMP_PASSWORD_MIN_LENGTH = 6
 
 
 @dataclass
@@ -64,10 +67,15 @@ def _password_to_hash(password: str, salt: str) -> str:
     return derived_key.hex()
 
 
-def hash_password(password: str) -> tuple[str, str]:
+def hash_password(password: str, *, allow_temporary_short_password: bool = False) -> tuple[str, str]:
     password = password.strip()
-    if len(password) < 8:
-        raise ValueError("La contrasena debe tener al menos 8 caracteres.")
+    minimum_length = TEMP_PASSWORD_MIN_LENGTH if allow_temporary_short_password else MIN_PASSWORD_LENGTH
+    if len(password) < minimum_length:
+        if allow_temporary_short_password:
+            raise ValueError(
+                f"La contrasena temporal debe tener al menos {TEMP_PASSWORD_MIN_LENGTH} caracteres."
+            )
+        raise ValueError(f"La contrasena debe tener al menos {MIN_PASSWORD_LENGTH} caracteres.")
     salt = secrets.token_hex(16)
     return _password_to_hash(password, salt), salt
 
@@ -106,6 +114,7 @@ def _row_to_user(row: dict[str, Any]) -> AuthUser:
         full_name=str(row["full_name"]),
         is_admin=bool(row["is_admin"]),
         is_active=bool(row["is_active"]),
+        must_change_password=bool(row.get("must_change_password", False)),
         last_login_at=row.get("last_login_at"),
         created_at=row["created_at"],
     )
@@ -163,10 +172,17 @@ def ensure_auth_schema() -> None:
                 password_salt TEXT NOT NULL,
                 is_admin BOOLEAN NOT NULL DEFAULT FALSE,
                 is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
                 last_login_at TIMESTAMPTZ NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE app_users
+            ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE
             """
         )
         cursor.execute(
@@ -267,6 +283,7 @@ def create_user(
     password: str,
     is_admin: bool,
     is_active: bool,
+    must_change_password: bool,
 ) -> AuthUser:
     normalized_username = _normalize_username(username)
     normalized_name = _normalize_full_name(full_name)
@@ -275,7 +292,10 @@ def create_user(
     if not normalized_name:
         raise ValueError("Debes indicar el nombre completo del usuario.")
 
-    password_hash, password_salt = hash_password(password)
+    password_hash, password_salt = hash_password(
+        password,
+        allow_temporary_short_password=must_change_password,
+    )
 
     with get_cursor(dictionary=True) as (connection, cursor):
         cursor.execute("SELECT 1 FROM app_users WHERE username = %s", (normalized_username,))
@@ -291,10 +311,11 @@ def create_user(
                 password_hash,
                 password_salt,
                 is_admin,
-                is_active
+                is_active,
+                must_change_password
             )
-            VALUES (%s, %s, %s, %s, %s, %s)
-            RETURNING id, username, full_name, is_admin, is_active, last_login_at, created_at
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id, username, full_name, is_admin, is_active, must_change_password, last_login_at, created_at
             """,
             (
                 normalized_username,
@@ -303,6 +324,7 @@ def create_user(
                 password_salt,
                 is_admin,
                 is_active,
+                must_change_password,
             ),
         )
         row = cursor.fetchone()
@@ -344,6 +366,7 @@ def update_user(
     password: str | None = None,
     is_admin: bool | None = None,
     is_active: bool | None = None,
+    must_change_password: bool | None = None,
 ) -> AuthUser:
     with get_cursor(dictionary=True) as (connection, cursor):
         cursor.execute("SELECT * FROM app_users WHERE id = %s", (user_id,))
@@ -353,6 +376,11 @@ def update_user(
 
         target_is_admin = bool(existing["is_admin"]) if is_admin is None else is_admin
         target_is_active = bool(existing["is_active"]) if is_active is None else is_active
+        target_must_change_password = (
+            bool(existing["must_change_password"])
+            if must_change_password is None
+            else must_change_password
+        )
         if bool(existing["is_admin"]) and bool(existing["is_active"]) and (not target_is_admin or not target_is_active):
             if _active_admin_count(exclude_user_id=user_id) == 0:
                 raise ValueError("Debe existir al menos un administrador activo.")
@@ -364,7 +392,10 @@ def update_user(
         password_hash = str(existing["password_hash"])
         password_salt = str(existing["password_salt"])
         if password is not None and password.strip():
-            password_hash, password_salt = hash_password(password)
+            password_hash, password_salt = hash_password(
+                password,
+                allow_temporary_short_password=target_must_change_password,
+            )
 
         cursor.execute(
             """
@@ -374,9 +405,10 @@ def update_user(
                 password_salt = %s,
                 is_admin = %s,
                 is_active = %s,
+                must_change_password = %s,
                 updated_at = NOW()
             WHERE id = %s
-            RETURNING id, username, full_name, is_admin, is_active, last_login_at, created_at
+            RETURNING id, username, full_name, is_admin, is_active, must_change_password, last_login_at, created_at
             """,
             (
                 normalized_name,
@@ -384,6 +416,7 @@ def update_user(
                 password_salt,
                 target_is_admin,
                 target_is_active,
+                target_must_change_password,
                 user_id,
             ),
         )
@@ -415,6 +448,7 @@ def list_users_with_stats() -> list[UserSummary]:
                 u.full_name,
                 u.is_admin,
                 u.is_active,
+                u.must_change_password,
                 u.last_login_at,
                 u.created_at,
                 MAX(l.created_at) AS last_activity_at,
@@ -489,6 +523,152 @@ def list_user_daily_consultations(user_id: int, limit: int = 30) -> list[UserDai
     return [UserDailyConsultationItem(**row) for row in rows]
 
 
+def change_current_user_password(
+    session: SessionContext,
+    *,
+    current_password: str,
+    new_password: str,
+) -> AuthUser:
+    with get_cursor(dictionary=True) as (connection, cursor):
+        cursor.execute("SELECT * FROM app_users WHERE id = %s", (session.user.id,))
+        existing = cursor.fetchone()
+        if existing is None:
+            raise ValueError("El usuario actual ya no existe.")
+
+        if not verify_password(current_password, str(existing["password_hash"]), str(existing["password_salt"])):
+            raise ValueError("La contrasena actual no es correcta.")
+
+        if verify_password(new_password, str(existing["password_hash"]), str(existing["password_salt"])):
+            raise ValueError("La nueva contrasena debe ser diferente a la actual.")
+
+        password_hash, password_salt = hash_password(new_password)
+        cursor.execute(
+            """
+            UPDATE app_users
+            SET password_hash = %s,
+                password_salt = %s,
+                must_change_password = FALSE,
+                updated_at = NOW()
+            WHERE id = %s
+            RETURNING id, username, full_name, is_admin, is_active, must_change_password, last_login_at, created_at
+            """,
+            (
+                password_hash,
+                password_salt,
+                session.user.id,
+            ),
+        )
+        updated = cursor.fetchone()
+
+        cursor.execute(
+            """
+            UPDATE app_user_sessions
+            SET revoked_at = NOW()
+            WHERE user_id = %s
+              AND id <> %s
+              AND revoked_at IS NULL
+            """,
+            (session.user.id, session.session_id),
+        )
+        connection.commit()
+
+    return _row_to_user(updated)
+
+
+def seed_user_account(
+    *,
+    username: str,
+    full_name: str,
+    password: str,
+    is_admin: bool,
+    is_active: bool,
+    must_change_password: bool,
+) -> tuple[AuthUser, bool]:
+    normalized_username = _normalize_username(username)
+    normalized_name = _normalize_full_name(full_name)
+    if not normalized_username:
+        raise ValueError("Debes indicar un nombre de usuario.")
+    if not normalized_name:
+        raise ValueError("Debes indicar el nombre completo del usuario.")
+
+    password_hash, password_salt = hash_password(
+        password,
+        allow_temporary_short_password=must_change_password,
+    )
+
+    with get_cursor(dictionary=True) as (connection, cursor):
+        cursor.execute("SELECT id FROM app_users WHERE username = %s", (normalized_username,))
+        existing = cursor.fetchone()
+
+        if existing is None:
+            cursor.execute(
+                """
+                INSERT INTO app_users
+                (
+                    username,
+                    full_name,
+                    password_hash,
+                    password_salt,
+                    is_admin,
+                    is_active,
+                    must_change_password
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, username, full_name, is_admin, is_active, must_change_password, last_login_at, created_at
+                """,
+                (
+                    normalized_username,
+                    normalized_name,
+                    password_hash,
+                    password_salt,
+                    is_admin,
+                    is_active,
+                    must_change_password,
+                ),
+            )
+            row = cursor.fetchone()
+            created = True
+        else:
+            cursor.execute(
+                """
+                UPDATE app_users
+                SET full_name = %s,
+                    password_hash = %s,
+                    password_salt = %s,
+                    is_admin = %s,
+                    is_active = %s,
+                    must_change_password = %s,
+                    updated_at = NOW()
+                WHERE username = %s
+                RETURNING id, username, full_name, is_admin, is_active, must_change_password, last_login_at, created_at
+                """,
+                (
+                    normalized_name,
+                    password_hash,
+                    password_salt,
+                    is_admin,
+                    is_active,
+                    must_change_password,
+                    normalized_username,
+                ),
+            )
+            row = cursor.fetchone()
+            cursor.execute(
+                """
+                UPDATE app_user_sessions
+                SET revoked_at = NOW()
+                WHERE user_id = %s
+                  AND revoked_at IS NULL
+                """,
+                (row["id"],),
+            )
+            created = False
+
+        connection.commit()
+
+    return _row_to_user(row), created
+
+
 def authenticate_user(username: str, password: str, request: Request) -> LoginResponse:
     normalized_username = _normalize_username(username)
     with get_cursor(dictionary=True) as (connection, cursor):
@@ -519,7 +699,7 @@ def authenticate_user(username: str, password: str, request: Request) -> LoginRe
             SET last_login_at = NOW(),
                 updated_at = NOW()
             WHERE id = %s
-            RETURNING id, username, full_name, is_admin, is_active, last_login_at, created_at
+            RETURNING id, username, full_name, is_admin, is_active, must_change_password, last_login_at, created_at
             """,
             (row["id"],),
         )
@@ -562,6 +742,7 @@ def get_session_context(token: str) -> SessionContext | None:
                 u.full_name,
                 u.is_admin,
                 u.is_active,
+                u.must_change_password,
                 u.last_login_at,
                 u.created_at
             FROM app_user_sessions s
