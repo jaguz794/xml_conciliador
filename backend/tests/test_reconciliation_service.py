@@ -3,7 +3,9 @@ import unittest
 import pandas as pd
 
 from backend.app.services.reconciliation_service import (
+    COMPARISON_SQL,
     _apply_xml_package_adjustment,
+    _build_erp_invoice_lookup,
     _infer_package_factor_from_matched_rows,
     _merge_packaging_rows,
     _recalculate_comparison_columns,
@@ -11,6 +13,20 @@ from backend.app.services.reconciliation_service import (
 
 
 class ReconciliationPackagingTests(unittest.TestCase):
+    def test_builds_normalized_lookup_for_erp_invoice_reference(self) -> None:
+        self.assertEqual(
+            _build_erp_invoice_lookup("06 145387"),
+            ("06145387", "06145387", "6145387"),
+        )
+        self.assertEqual(
+            _build_erp_invoice_lookup("06145387"),
+            ("06145387", "06145387", "6145387"),
+        )
+
+    def test_comparison_sql_checks_provider_and_fp_reference(self) -> None:
+        self.assertIn("COALESCE(NULLIF(mov.id_terc_prov, ''), mov.id_terc) = %s", COMPARISON_SQL)
+        self.assertIn("REPLACE(mov.tipo_fp, ' ', '') || REPLACE(mov.nro_fp, ' ', '') = %s", COMPARISON_SQL)
+
     def test_extracts_explicit_package_factor_from_xml_description(self) -> None:
         frame = pd.DataFrame(
             [
