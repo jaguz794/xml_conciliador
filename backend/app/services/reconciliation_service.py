@@ -130,16 +130,10 @@ erp_data AS (
     FROM cmmovimiento_inventario mov
     INNER JOIN items i
         ON mov.id_item = i.id_item
-    WHERE COALESCE(NULLIF(mov.id_terc_prov, ''), mov.id_terc) = %s
-      AND mov.doc_inv_tipo = 'EA'
-      AND (
-            mov.documento_alt = %s
-         OR REPLACE(mov.documento_alt, ' ', '') = %s
-         OR NULLIF(LTRIM(REPLACE(mov.documento_alt, ' ', ''), '0'), '') = %s
-         OR REPLACE(mov.tipo_fp, ' ', '') || REPLACE(mov.nro_fp, ' ', '') = %s
-         OR REPLACE(mov.nro_fp, ' ', '') = %s
-         OR NULLIF(LTRIM(REPLACE(mov.nro_fp, ' ', ''), '0'), '') = %s
-      )
+    WHERE mov.id_terc = %s
+      AND TRIM(mov.doc_inv_tipo) = 'EA'
+      AND LENGTH(TRIM(mov.documento_alt)) > 3
+      AND %s LIKE '%%' || TRIM(mov.documento_alt)
     GROUP BY i.id_item
 )
 SELECT
@@ -181,7 +175,7 @@ FULL OUTER JOIN erp_data e
 ORDER BY estado DESC, codigo_barras ASC
 """
 
-CACHE_VERSION = "v10"
+CACHE_VERSION = "v11"
 GLOBAL_TOTAL_TOLERANCE = 1
 
 PACKAGE_FACTOR_PATTERN = re.compile(
@@ -384,26 +378,6 @@ def _safe_cache_key(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "_", value.strip())
 
 
-def _normalize_invoice_reference(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9]", "", value.strip()).upper()
-
-
-def _normalize_invoice_digits(value: str) -> str:
-    return re.sub(r"[^0-9]", "", value.strip())
-
-
-def _strip_leading_zeroes(value: str) -> str:
-    stripped = value.lstrip("0")
-    return stripped or value
-
-
-def _build_erp_invoice_lookup(factura: str) -> tuple[str, str, str]:
-    normalized_reference = _normalize_invoice_reference(factura)
-    normalized_digits = _normalize_invoice_digits(factura)
-    normalized_digits_without_zeroes = _strip_leading_zeroes(normalized_digits) if normalized_digits else ""
-    return normalized_reference, normalized_digits, normalized_digits_without_zeroes
-
-
 def _cache_file_path(factura: str, nit: str) -> Path:
     filename = f"{CACHE_VERSION}__{_safe_cache_key(nit)}__{_safe_cache_key(factura)}.json"
     return settings.reconciliation_cache_dir / filename
@@ -505,7 +479,6 @@ def list_available_invoices(
 
 
 def _get_comparison_dataframe(factura: str, nit: str) -> pd.DataFrame:
-    normalized_reference, normalized_digits, normalized_digits_without_zeroes = _build_erp_invoice_lookup(factura)
     with get_cursor() as (_, cursor):
         cursor.execute(
             COMPARISON_SQL,
@@ -514,11 +487,6 @@ def _get_comparison_dataframe(factura: str, nit: str) -> pd.DataFrame:
                 nit,
                 nit,
                 factura,
-                normalized_reference,
-                normalized_digits_without_zeroes,
-                normalized_reference,
-                normalized_digits,
-                normalized_digits_without_zeroes,
             ),
         )
         rows = cursor.fetchall()
