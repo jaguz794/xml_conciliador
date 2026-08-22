@@ -195,6 +195,7 @@ SIZE_TOKEN_PATTERN = re.compile(
 )
 
 DESCRIPTION_TOKEN_PATTERN = re.compile(r"[A-Z0-9]+")
+MEASUREMENT_TOKEN_PATTERN = re.compile(r"(\d+(?:[.,]\d+)?)(KG|GRS|GR|G|ML|L)", re.IGNORECASE)
 
 PACKAGING_DESCRIPTION_TOKENS = {
     "BJA",
@@ -230,6 +231,26 @@ PACKAGING_DESCRIPTION_TOKENS = {
     "UNX",
     "UX",
     "X",
+}
+
+GENERIC_DESCRIPTION_TOKENS = {
+    "AGUA",
+    "BEBIDA",
+    "BOLSA",
+    "BOTELLA",
+    "BOTELLAS",
+    "ENVASE",
+    "GAS",
+    "LATA",
+    "LATAS",
+    "MOD",
+    "PACK",
+    "PRESENTACION",
+    "PET",
+    "RETORNABLE",
+    "TETRA",
+    "UHT",
+    "VIDRIO",
 }
 
 PACKAGING_ALERT = "CRUCE EMPAQUE"
@@ -555,15 +576,13 @@ def _description_tokens(description: Any) -> set[str]:
     if not raw_description:
         return set()
 
-    compact_description = re.sub(r"\s+", "", raw_description)
-    tokens = {
-        f"{match.group(1).replace(',', '.')}G"
-        for match in SIZE_TOKEN_PATTERN.finditer(compact_description)
-    }
+    tokens = _measurement_tokens(raw_description)
 
     normalized_text = re.sub(r"[^A-Z0-9]+", " ", raw_description)
     for token in DESCRIPTION_TOKEN_PATTERN.findall(normalized_text):
         if token in PACKAGING_DESCRIPTION_TOKENS:
+            continue
+        if token in GENERIC_DESCRIPTION_TOKENS:
             continue
         if any(char.isdigit() for char in token):
             continue
@@ -574,17 +593,71 @@ def _description_tokens(description: Any) -> set[str]:
     return tokens
 
 
-def _description_similarity(xml_description: Any, erp_description: Any) -> tuple[int, float]:
+def _normalize_measurement_token(raw_value: str, raw_unit: str) -> str:
+    value = raw_value.strip()
+    if "." in value and "," in value:
+        if value.rfind(",") > value.rfind("."):
+            value = value.replace(".", "").replace(",", ".")
+        else:
+            value = value.replace(",", "")
+    elif "," in value:
+        _, tail = value.rsplit(",", 1)
+        value = value.replace(",", "") if tail.isdigit() and len(tail) == 3 else value.replace(",", ".")
+    elif "." in value:
+        _, tail = value.rsplit(".", 1)
+        value = value.replace(".", "") if tail.isdigit() and len(tail) == 3 else value
+
+    numeric_value = float(value)
+    unit = raw_unit.upper()
+    if unit == "KG":
+        numeric_value *= 1000
+        unit = "G"
+    elif unit == "L":
+        numeric_value *= 1000
+        unit = "ML"
+    elif unit in {"GR", "GRS"}:
+        unit = "G"
+
+    if numeric_value.is_integer():
+        normalized_value = str(int(numeric_value))
+    else:
+        normalized_value = f"{numeric_value:.3f}".rstrip("0").rstrip(".")
+
+    return f"{normalized_value}{unit}"
+
+
+def _measurement_tokens(description: Any) -> set[str]:
+    compact_description = re.sub(r"\s+", "", _text_value(description).upper())
+    if not compact_description:
+        return set()
+
+    return {
+        _normalize_measurement_token(match.group(1), match.group(2))
+        for match in MEASUREMENT_TOKEN_PATTERN.finditer(compact_description)
+    }
+
+
+def _description_similarity(xml_description: Any, erp_description: Any) -> tuple[int, int, float]:
     xml_tokens = _description_tokens(xml_description)
     erp_tokens = _description_tokens(erp_description)
     if not xml_tokens or not erp_tokens:
-        return 0, 0.0
+        return 0, 0, 0.0
 
+    measurement_overlap = len(_measurement_tokens(xml_description) & _measurement_tokens(erp_description))
     overlap = len(xml_tokens & erp_tokens)
     xml_text = " ".join(sorted(xml_tokens))
     erp_text = " ".join(sorted(erp_tokens))
     sequence_ratio = SequenceMatcher(None, xml_text, erp_text).ratio()
-    return overlap, sequence_ratio
+    return overlap, measurement_overlap, sequence_ratio
+
+
+def _descriptions_support_packaging_match(xml_description: Any, erp_description: Any) -> bool:
+    overlap, measurement_overlap, sequence_ratio = _description_similarity(xml_description, erp_description)
+    if overlap >= 2:
+        return True
+    if measurement_overlap and overlap >= 1 and sequence_ratio >= 0.45:
+        return True
+    return bool(measurement_overlap and sequence_ratio >= 0.72)
 
 
 def _extract_package_factor(description: Any) -> int:
@@ -632,6 +705,11 @@ def _infer_package_factor_from_matched_rows(frame: pd.DataFrame) -> pd.DataFrame
     adjusted = frame.copy()
     for index, row in adjusted.iterrows():
         if not _text_value(row.get("descripcion_xml")) or not _text_value(row.get("descripcion_erp")):
+            continue
+        if not _descriptions_support_packaging_match(
+            row.get("descripcion_xml"),
+            row.get("descripcion_erp"),
+        ):
             continue
 
         xml_original_qty = _float_value(row.get("xml_cant_original") or row.get("xml_cant"))
@@ -687,7 +765,7 @@ def _merge_packaging_rows(frame: pd.DataFrame) -> pd.DataFrame:
 
         best_match_index: int | None = None
         best_factor = 1
-        best_score: tuple[int, float, float] | None = None
+        best_score: tuple[int, int, float, float] | None = None
 
         for erp_index in erp_only_indexes:
             if erp_index in used_erp_indexes:
@@ -705,11 +783,14 @@ def _merge_packaging_rows(frame: pd.DataFrame) -> pd.DataFrame:
             if not _totals_close(xml_row.get("xml_total"), erp_row.get("erp_total")):
                 continue
 
-            overlap, sequence_ratio = _description_similarity(
+            overlap, measurement_overlap, sequence_ratio = _description_similarity(
                 xml_row.get("descripcion_xml"),
                 erp_row.get("descripcion_erp"),
             )
-            if overlap < 2 and sequence_ratio < 0.62:
+            if not _descriptions_support_packaging_match(
+                xml_row.get("descripcion_xml"),
+                erp_row.get("descripcion_erp"),
+            ):
                 continue
 
             adjusted_xml_qty = xml_original_qty * rounded_factor
@@ -717,11 +798,16 @@ def _merge_packaging_rows(frame: pd.DataFrame) -> pd.DataFrame:
             erp_price = _float_value(erp_row.get("erp_precio"))
             if erp_price > 0:
                 price_tolerance = max(erp_price * 0.08, 5)
-                if abs(adjusted_xml_price - erp_price) > price_tolerance and overlap < 3 and sequence_ratio < 0.72:
+                if (
+                    abs(adjusted_xml_price - erp_price) > price_tolerance
+                    and overlap < 3
+                    and measurement_overlap == 0
+                    and sequence_ratio < 0.72
+                ):
                     continue
 
             total_gap = abs(_float_value(xml_row.get("xml_total")) - _float_value(erp_row.get("erp_total")))
-            score = (overlap, sequence_ratio, -total_gap)
+            score = (overlap, measurement_overlap, sequence_ratio, -total_gap)
             if best_score is None or score > best_score:
                 best_match_index = erp_index
                 best_factor = rounded_factor
@@ -852,22 +938,25 @@ def _build_ac_explanation_frame(items_frame: pd.DataFrame) -> pd.DataFrame:
     for xml_index in xml_only_indexes:
         xml_row = working.loc[xml_index]
         best_match_index: int | None = None
-        best_score: tuple[int, float, float] | None = None
+        best_score: tuple[int, int, float, float] | None = None
 
         for erp_index in erp_only_indexes:
             if erp_index in used_erp_indexes:
                 continue
 
             erp_row = working.loc[erp_index]
-            overlap, sequence_ratio = _description_similarity(
+            overlap, measurement_overlap, sequence_ratio = _description_similarity(
                 xml_row.get("descripcion_xml"),
                 erp_row.get("descripcion_erp"),
             )
-            if overlap < 2 and sequence_ratio < 0.62:
+            if not _descriptions_support_packaging_match(
+                xml_row.get("descripcion_xml"),
+                erp_row.get("descripcion_erp"),
+            ):
                 continue
 
             total_gap = abs(_float_value(xml_row.get("xml_total")) - _float_value(erp_row.get("erp_total")))
-            score = (overlap, sequence_ratio, -total_gap)
+            score = (overlap, measurement_overlap, sequence_ratio, -total_gap)
             if best_score is None or score > best_score:
                 best_match_index = erp_index
                 best_score = score
